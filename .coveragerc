@@ -1,0 +1,11 @@
+[run]
+source =
+    epics_log_squasher
+[report]
+omit =
+    #versioning
+    .*version.*
+    *_version.py
+    #tests
+    *test*
+    epics_log_squasher/tests/*

@@ -1,0 +1,35 @@
+
+{% set data = load_setup_py_data() %}
+
+
+package:
+  name: epics_log_squasher
+
+  version: {{ data.get('version') }}
+
+
+source:
+  path: ..
+
+build:
+  number: 0
+  noarch: python
+
+requirements:
+  build:
+    - python >=3.7
+    - setuptools
+  run:
+    - python >=3.7
+
+test:
+  imports:
+    - epics_log_squasher
+  requires:
+    - pytest
+
+about:
+  home: https://github.com/pcdshub/epics-log-squasher
+  license: LicenseRef-BSD-3-Clause-SLAC
+  license_family: BSD
+  summary: EPICS IOC Output Squashing/Filtering Tool
