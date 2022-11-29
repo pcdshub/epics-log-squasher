@@ -1,5 +1,5 @@
 """
-`epics_log_squasher` is the top-level command for accessing various subcommands.
+`epics-log-squasher` is the top-level command for accessing various subcommands.
 
 Try:
 
@@ -14,7 +14,7 @@ import epics_log_squasher
 DESCRIPTION = __doc__
 
 
-MODULES = ("help", )
+MODULES = ("filter", )
 
 
 def _try_import(module):
@@ -34,14 +34,14 @@ def _build_commands():
             unavailable.append((module, ex))
         else:
             result[module] = (mod.build_arg_parser, mod.main)
-            DESCRIPTION += f'\n    $ epics_log_squasher {module} --help'
+            DESCRIPTION += f'\n    $ epics-log-squasher {module} --help'
 
     if unavailable:
         DESCRIPTION += '\n\n'
 
         for module, ex in unavailable:
             DESCRIPTION += (
-                f'\nWARNING: "epics_log_squasher {module}" is unavailable due to:'
+                f'\nWARNING: "epics-log-squasher {module}" is unavailable due to:'
                 f'\n\t{ex.__class__.__name__}: {ex}'
             )
 
@@ -53,7 +53,7 @@ COMMANDS = _build_commands()
 
 def main():
     top_parser = argparse.ArgumentParser(
-        prog='epics_log_squasher',
+        prog='epics-log-squasher',
         description=DESCRIPTION,
         formatter_class=argparse.RawTextHelpFormatter
     )
@@ -62,7 +62,7 @@ def main():
         '--version', '-V',
         action='version',
         version=epics_log_squasher.__version__,
-        help="Show the epics_log_squasher version number and exit."
+        help="Show the epics-log-squasher version number and exit."
     )
 
     top_parser.add_argument(
