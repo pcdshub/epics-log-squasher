@@ -118,6 +118,20 @@ test_cases = [
         ),
         id="asyn_connect_failed",
     ),
+    pytest.param(
+        """\
+        2022/11/30 14:49:19.326201 scan-1 CXI:MCS2:01:m2:STATE_RBV lockRequest: pasynManager->queueRequest() failed: port TCP0 not connected
+        2022/11/30 14:49:19.326233 scan-1 CXI:MCS2:01:m3:SCAN_POS lockRequest: pasynManager->queueRequest() failed: port TCP0 not connected
+        2022/11/30 14:49:19.326261 scan-1 CXI:MCS2:01:m3:STATE_RBV lockRequest: pasynManager->queueRequest() failed: port TCP0 not connected
+        """,
+        parser.Squashed(
+            lines=[
+                "scan-1 lockRequest: pasynManager->queueRequest() failed: port TCP0 not connected: CXI:MCS2:01:m2:STATE_RBV, CXI:MCS2:01:m3:SCAN_POS, CXI:MCS2:01:m3:STATE_RBV",
+            ],
+            source_lines=3,
+        ),
+        id="asyn_connect_failed",
+    ),
 ]
 
 

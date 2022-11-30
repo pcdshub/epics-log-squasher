@@ -102,6 +102,11 @@ class GroupableRegexes:
             message_format="pasynCommon->connect() failed: {reason}",
             extras=["pv"],
         ),
+        asyn_lock_failed=GroupJoiner(
+            pattern=re.compile(r'(?P<context>.*) (?P<pv>.*) lockRequest: pasynManager->queueRequest\(\) failed: (?P<reason>.*)'),
+            message_format="{context} lockRequest: pasynManager->queueRequest() failed: {reason}",
+            extras=["pv"],
+        ),
     )
 
     @classmethod
