@@ -55,6 +55,75 @@ class GreenlitRegexes(Regexes):
    
 
 @dataclass
+class GroupJoiner:
+    pattern: re.Pattern
+    message_format: str
+    extras: List[str]
+    extras_join: str = ", "
+    count_threshold: int = 10
+
+    def join(self, matches: List[GroupMatch]) -> str:
+        if not matches:
+            return ""
+
+        extras = [
+            match.groupdict[extra]
+            for match in matches
+            for extra in self.extras
+        ]
+        if len(extras) > self.count_threshold:
+            extras = extras[:self.count_threshold]
+            extras.append("...")
+
+        message = matches[0].message
+        extras_joined = self.extras_join.join(extras)
+        return f"{message}: {extras_joined}"
+
+
+@dataclass(frozen=True)
+class GroupMatch:
+    name: str
+    message: str
+    source: IndexedString
+    groupdict: Dict[str, str]
+
+
+@dataclass
+class GroupableRegexes:
+    """Regular expressions for log lines that can be grouped."""
+    groups: ClassVar[Dict[str, GroupJoiner]] = dict(
+        stream_protocol_aborted=GroupJoiner(
+            pattern=re.compile(r'(?P<pv>.*): Protocol aborted'),
+            message_format="Protocol aborted",
+            extras=["pv"],
+        ),
+        asyn_connect_failed=GroupJoiner(
+            pattern=re.compile(r'(?P<pv>.*): pasynCommon->connect\(\) failed: (?P<reason>.*)'),
+            message_format="pasynCommon->connect() failed: {reason}",
+            extras=["pv"],
+        ),
+    )
+
+    @classmethod
+    def group_fullmatch(cls, idx: IndexedString) -> Optional[GroupMatch]:
+        for group, joiner in cls.groups.items():
+            match = joiner.pattern.fullmatch(idx.value)
+            if match is None:
+                continue
+
+            groupdict = match.groupdict()
+            joiner = cls.groups[group]
+            return GroupMatch(
+                name=group,
+                message=joiner.message_format.format(**groupdict),
+                source=idx,
+                groupdict=groupdict,
+            )
+
+        return None
+
+
+@dataclass
 class DateFormats:
     """
     datetime.datetime-compatible formats for interpreting date and timestamps.
@@ -109,10 +178,28 @@ class IndexedString:
         return self.value
 
 
+def _split_indexes_and_groups(
+    messages: Union[IndexedString, GroupMatch]
+) -> Tuple[List[IndexedString], List[GroupMatch]]:
+    indexes = []
+    groups = []
+    for message in messages:
+        if isinstance(message, IndexedString):
+            indexes.append(message)
+        else:
+            groups.append(message)
+
+    if len(groups) == 1:
+        indexes.append(groups[0].source)
+        groups.clear()
+
+    return indexes, groups
+
+
 @dataclass
 class Squasher:
-    by_timestamp: Dict[int, List[IndexedString]] = field(default_factory=dict)
-    by_message: Dict[str, List[IndexedString]] = field(default_factory=dict)
+    by_timestamp: Dict[int, List[Union[IndexedString, GroupMatch]]] = field(default_factory=dict)
+    by_message: Dict[str, List[Union[IndexedString, GroupMatch]]] = field(default_factory=dict)
     messages: List[IndexedString] = field(default_factory=list)
     period_sec: float = 10.0
     messages_per_sec_threshold: float = 1.0
@@ -125,12 +212,21 @@ class Squasher:
 
     def add_indexed_string(self, value: IndexedString):
         self.messages.append(value)
+        if IgnoreRegexes.fullmatch(value.value):
+            return
 
         # Bin posix timestamps by the second:
         ts = int(value.timestamp.timestamp())
-        # ts = ts - (ts % self.period_sec)
         self.by_timestamp.setdefault(ts, []).append(value)
-        self.by_message.setdefault(value.value, []).append(value)
+        # ts = ts - (ts % self.period_sec)
+
+        match = GroupableRegexes.group_fullmatch(value)
+
+        if match is not None:
+            # Add the groupmatch, not the individual message
+            self.by_message.setdefault(match.message, []).append(match)
+        else:
+            self.by_message.setdefault(value.value, []).append(match or value)
 
     def add_lines(self, value: str):
         for line in value.splitlines():
@@ -140,29 +236,41 @@ class Squasher:
     def get_timespan(self) -> float:
         if len(self.by_timestamp) == 0:
             return 0.0
-        return max(self.by_timestamp) - min(self.by_timestamp)
+        return (max(self.by_timestamp) - min(self.by_timestamp)) + 1
 
     def squash(self) -> Squashed:
         squashed = []
-        for line, indexes in self.by_message.items():
-            if IgnoreRegexes.fullmatch(line):
-                continue
-            if GreenlitRegexes.fullmatch(line):
-                # Greenlit lines go in entirely
-                squashed.extend(indexes)
-                continue
+        for line, messages in self.by_message.items():
+            indexes, groups = _split_indexes_and_groups(messages)
 
-            first = indexes[0]
-            # last = indexes[-1]
-            if len(indexes) == 1:
-                squashed.append(first)
-            else:
-                count = len(indexes)
+            if indexes:
+                if GreenlitRegexes.fullmatch(line):
+                    # Greenlit lines go in entirely
+                    squashed.extend(indexes)
+                    continue
+
+                first = indexes[0]
+                # last = indexes[-1]
+                if len(indexes) == 1:
+                    squashed.append(first)
+                else:
+                    count = len(indexes)
+                    squashed.append(
+                        IndexedString(
+                            value=f"[{count}x] {line}",
+                            timestamp=first.timestamp,
+                            index=first.index,
+                        )
+                    )
+
+            if groups:
+                first = groups[0]
+                joiner = GroupableRegexes.groups[first.name]
                 squashed.append(
                     IndexedString(
-                        value=f"[{count}x] {line}",
-                        timestamp=first.timestamp,
-                        index=first.index,
+                        value=joiner.join(groups),
+                        timestamp=first.source.timestamp,
+                        index=first.source.index,
                     )
                 )
 

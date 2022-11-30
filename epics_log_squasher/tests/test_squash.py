@@ -1,3 +1,4 @@
+from typing import Dict
 
 import pytest
 import textwrap
@@ -30,7 +31,7 @@ test_cases = [
             ],
             source_lines=11,
         ),
-        id="repetitive_with_timestamp_asyn"
+        id="repetitive_with_timestamp_asyn",
     ),
     pytest.param(
         """\
@@ -45,7 +46,7 @@ test_cases = [
             ],
             source_lines=3,
         ),
-        id="repetitive_with_timestamp_prosilica"
+        id="repetitive_with_timestamp_prosilica",
     ),
     pytest.param(
         """\
@@ -63,7 +64,59 @@ test_cases = [
             ],
             source_lines=6,
         ),
-        id="repetitive_with_timestamp_ansi"
+        id="repetitive_with_timestamp_ansi",
+    ),
+    pytest.param(
+        """\
+        abc: Protocol aborted
+        def: Protocol aborted
+        ghi: Protocol aborted
+        """,
+        parser.Squashed(
+            lines=[
+                "Protocol aborted: abc, def, ghi",
+            ],
+            source_lines=3,
+        ),
+        id="protocol_abort_group",
+    ),
+    pytest.param(
+        """\
+        0: Protocol aborted
+        1: Protocol aborted
+        2: Protocol aborted
+        3: Protocol aborted
+        4: Protocol aborted
+        5: Protocol aborted
+        6: Protocol aborted
+        7: Protocol aborted
+        8: Protocol aborted
+        9: Protocol aborted
+        10: Protocol aborted
+        """,
+        parser.Squashed(
+            lines=[
+                "Protocol aborted: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, ..."
+            ],
+            source_lines=11,
+        ),
+        id="protocol_abort_truncated_group",
+    ),
+    pytest.param(
+        """\
+        abc: pasynCommon->connect() failed: some reason 1
+        012: pasynCommon->connect() failed: some reason 2
+        def: pasynCommon->connect() failed: some reason 1
+        345: pasynCommon->connect() failed: some reason 2
+        """,
+        parser.Squashed(
+            lines=[
+                "pasynCommon->connect() failed: some reason 1: abc, def",
+                "pasynCommon->connect() failed: some reason 2: 012, 345",
+            ],
+            source_lines=4,
+        ),
+        id="asyn_connect_failed",
     ),
 ]
 
@@ -74,3 +127,45 @@ def test_squash(lines: str, expected: parser.Squashed):
     squasher.add_lines(textwrap.dedent(lines.rstrip()))
     squashed = squasher.squash()
     assert squashed == expected
+
+
+@pytest.mark.parametrize(
+    "source_message, group, expected_message, groupdict",
+    [
+        pytest.param(
+            "abc: Protocol aborted",
+            "stream_protocol_aborted",
+            "Protocol aborted",
+            {
+                "pv": "abc",
+            },
+            id="stream_protocol_aborted",
+        ),
+        pytest.param(
+            "abc: pasynCommon->connect() failed: some reason",
+            "asyn_connect_failed",
+            "pasynCommon->connect() failed: some reason",
+            {
+                "pv": "abc",
+                "reason": "some reason",
+            },
+            id="asyn_connect_failed",
+        ),
+    ],
+)
+def test_groupable_regexes(
+    source_message: str,
+    group: str,
+    expected_message: str,
+    groupdict: Dict[str, str],
+):
+    idx = parser.IndexedString(
+        index=0,
+        timestamp=datetime.datetime.now(),
+        value=source_message,
+    )
+    match = parser.GroupableRegexes.group_fullmatch(idx)
+    assert match is not None
+    assert match.message == expected_message
+    assert match.name == group
+    assert match.groupdict == groupdict
