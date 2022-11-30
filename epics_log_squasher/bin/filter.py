@@ -22,10 +22,10 @@ def build_arg_parser(argparser=None):
     argparser.formatter_class = argparse.RawTextHelpFormatter
 
     argparser.add_argument(
-        'period',
+        "--period",
         type=float,
         default=10.0,
-        help='Get help on this.',
+        help="Log buffering period",
     )
 
     return argparser
@@ -45,6 +45,8 @@ def main(period: float = 10.0):
     read_thread = threading.Thread(target=_read_thread, daemon=True, args=(lines, lock))
     read_thread.start()
 
+    bytes_raw = 0
+    bytes_filtered = 0
     try:
         while True:
             time.sleep(period)
@@ -58,9 +60,12 @@ def main(period: float = 10.0):
             squash = Squasher()
             squash.add_lines("\n".join(acquired))
             squashed = squash.squash()
+
+            bytes_raw += sum(len(line) for line in acquired)
+            bytes_filtered += sum(len(line) for line in squashed.lines)
+
             for line in squashed.lines:
-                if len(squashed.lines) != acquired:
-                    print("**", len(acquired), "down to", len(squashed.lines))
                 print(line)
+            print(f"({bytes_raw} -> {bytes_filtered} bytes)")
     except KeyboardInterrupt:
         ...
