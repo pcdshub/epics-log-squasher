@@ -10,7 +10,6 @@ from typing import List
 
 from ..parser import Squasher
 
-
 DESCRIPTION = __doc__
 
 
@@ -66,6 +65,6 @@ def main(period: float = 10.0):
 
             for line in squashed.lines:
                 print(line)
-            print(f"({bytes_raw} -> {bytes_filtered} bytes)")
+            print(f"({bytes_raw} -> {bytes_filtered} bytes)", file=sys.stderr)
     except KeyboardInterrupt:
         ...
