@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class FileSizeMonitor:
-    stat: stat.fstat
+    stat: os.stat_result
     position: int
 
     def __init__(self, filename: str):
@@ -51,6 +51,9 @@ class File:
     buffer: list[str] = field(default_factory=list)
 
     def close(self):
+        if self.fp is None:
+            return
+
         self.fp.close()
         self.fp = None
 
@@ -66,6 +69,7 @@ class File:
             self.fp.seek(seek_pos)
 
     def read(self):
+        assert self.fp is not None
         try:
             data = self.fp.read()
         except BlockingIOError:
@@ -96,7 +100,7 @@ class File:
 
 class FileReaderThread:
     _thread: Optional[threading.Thread]
-    files: Dict[int, File]
+    files: Dict[str, File]
 
     def __init__(self, close_timeout: float = 30.0):
         self.close_timeout = close_timeout
@@ -115,11 +119,11 @@ class FileReaderThread:
             time.sleep(0)
 
             with self._lock:
-                files = list(self.files.items())
+                files = list(self.files.values())
 
             to_remove = []
 
-            for fn, file in files:
+            for file in files:
                 file.read()
                 if file.elapsed_since_last_update > self.close_timeout:
                     to_remove.append(file)
@@ -136,7 +140,6 @@ class FileReaderThread:
 
     def stop(self):
         self._stop_event.set()
-        self.poller.close()
 
     def add_file(self, file: File):
         if file.fp is None:
@@ -184,7 +187,7 @@ class GlobalMonitor:
         for fn in self.monitored_files:
             file = self.files[fn]
             # file.fp.seek(file.monitor.stat.st_size)
-            file.position = file.monitor.stat.st_size
+            # file.position = file.monitor.stat.st_size
             # logger.info("File %s Pos: %d of %d", fn, file.position, file.monitor.stat.st_size)
 
 
