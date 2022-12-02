@@ -91,7 +91,7 @@ class File:
             # self.fp.close()
             raise RuntimeError()
 
-        self.fp = open(self.filename, "rt")
+        self.fp = open(self.filename, "rt", encoding="latin-1")
         os.set_blocking(self.fp.fileno(), False)
 
         if seek_pos is not None:

@@ -149,6 +149,28 @@ test_cases = [
         ),
         id="errlog_spam",
     ),
+    pytest.param(
+        """\
+        @@@ This
+        @@@ This
+        @@@ Should be
+        @@@ Should be
+        @@@ Greenlit
+        @@@ Greenlit
+        """,
+        parser.Squashed(
+            lines=[
+                "@@@ This",
+                "@@@ This",
+                "@@@ Should be",
+                "@@@ Should be",
+                "@@@ Greenlit",
+                "@@@ Greenlit",
+            ],
+            source_lines=6,
+        ),
+        id="greenlit_ioc",
+    ),
 ]
 
 

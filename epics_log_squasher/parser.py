@@ -61,7 +61,7 @@ class IgnoreRegexes(Regexes):
 @dataclass
 class GreenlitRegexes(Regexes):
     """Regular expressions for log lines that should always be recorded."""
-    procserv_lines: re.Pattern = re.compile(r'^@@@ ')
+    procserv_lines: re.Pattern = re.compile(r'@@@ .*')
 
 
 @dataclass
