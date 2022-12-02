@@ -171,6 +171,26 @@ test_cases = [
         ),
         id="greenlit_ioc",
     ),
+    pytest.param(
+        """\
+        2022-12-02T13:48:08-0800 Info: Connected to 172.21.68.250
+        2022-12-02T13:48:08-0800 Info: connection closed by remote
+        2022/12/02 13:48:11.030 cyclicThread: forcing disconnect.
+        2022-12-02T13:48:11-0800 Info: Connected to 172.21.68.250
+        2022-12-02T13:48:11-0800 Info: connection closed by remote
+        2022/12/02 13:48:12.530 cyclicThread: forcing disconnect.
+        """,
+        parser.Squashed(
+            lines=[
+                # "2022/11/09 09:32:xx.xxx HPL:GIGE:BASLER10:CONNECTION devAsynInt32 process error",
+                "[2x] Info: Connected to 172.21.68.250",
+                "[2x] Info: connection closed by remote",
+                "[2x] cyclicThread: forcing disconnect.",
+            ],
+            source_lines=6,
+        ),
+        id="repetitive_with_weird_timestamps",
+    ),
 ]
 
 

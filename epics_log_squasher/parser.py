@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import functools
 import re
 from dataclasses import dataclass, field
-from typing import ClassVar, Dict, List, Optional, Tuple, Union
+from typing import Callable, ClassVar, Dict, List, Optional, Tuple, Union
 
 
 class Regexes:
@@ -160,6 +161,18 @@ class GroupableRegexes:
 
 
 @dataclass
+class DateFormat:
+    format: str
+    #: The character to split the line on, with the first part being the
+    #: date and timestamp, the remainder being the log message
+    split_char: str = " "
+    #: This number of ``split_char`` to partition the message
+    split_count: int = 2
+    #: A cleaner that can be called on the result message
+    cleaner: Optional[Callable[[str], str]] = None
+
+
+@dataclass
 class DateFormats:
     """
     datetime.datetime-compatible formats for interpreting date and timestamps.
@@ -167,29 +180,40 @@ class DateFormats:
     Embedded in a dataclass so items can have individual names or be referenced
     more easily.
     """
-    standard: str = "%Y/%m/%d %H:%M:%S.%f"
-    # Found in ioc-xrt-m3h-switch
-    short: str = "%m/%d %H:%M:%S.%f"
-
-    _date_formats_: ClassVar[Dict[str, str]]
+    _date_formats_: ClassVar[Dict[str, DateFormat]] = dict(
+        standard=DateFormat(
+            format="%Y/%m/%d %H:%M:%S.%f",
+        ),
+        # Found in ioc-xrt-m3h-switch
+        short=DateFormat(
+            format="%m/%d %H:%M:%S.%f",
+        ),
+        # ads-ioc ISO8601-ish timestamps _with_ T and a time zone we can't
+        # easily work with: e.g., 2022-12-02T13:30:56-08:00"
+        iso8601_1=DateFormat(
+            format="%Y-%m-%dT%H:%M:%S",  # suffix: -0800
+            split_char="-",
+            split_count=3,
+            cleaner=functools.partial(re.compile(r"^\d+\s+").sub, ""),
+        ),
+    )
 
     @classmethod
     def find_timestamp(cls, line: str) -> Tuple[Optional[datetime.datetime], str]:
-        # TODO: only support basic space delimiters for now
-        split = line.strip().split(" ")
-        date_portion = " ".join(split[:2])
-        remainder = " ".join(split[2:])
-
         for fmt in cls._date_formats_.values():
             try:
-                return datetime.datetime.strptime(date_portion, fmt), remainder
+                split = line.strip().split(fmt.split_char)
+                date_portion = fmt.split_char.join(split[:fmt.split_count])
+                dt = datetime.datetime.strptime(date_portion, fmt.format)
             except ValueError:
                 ...
+            else:
+                remainder = fmt.split_char.join(split[fmt.split_count:])
+                if fmt.cleaner:
+                    remainder = fmt.cleaner(remainder)
+                return dt, remainder
 
         return None, line
-
-
-DateFormats._date_formats_ = dataclasses.asdict(DateFormats())
 
 
 @dataclass(frozen=True)
