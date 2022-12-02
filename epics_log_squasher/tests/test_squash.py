@@ -131,6 +131,24 @@ test_cases = [
         ),
         id="asyn_connect_failed",
     ),
+    pytest.param(
+        """\
+        errlog: 676 messages were discarded
+        errlog: 189 messages were discarded
+        errlog: 511 messages were discarded
+        abc
+        errlog: 511 messages were discarded
+        errlog: 40 messages were discarded
+        """,
+        parser.Squashed(
+            lines=[
+                "errlog: messages were discarded: 676, 189, 511, 511, 40",
+                "abc",
+            ],
+            source_lines=6,
+        ),
+        id="errlog_spam",
+    ),
 ]
 
 
