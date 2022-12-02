@@ -1,3 +1,14 @@
+"""
+EPICS IOC log file output parsing and cleaning
+
+Pipeline is roughly:
+
+1. Pre-process with "clean" regexes (CleanRegexes)
+2. Pre-process to extract a timestamp, if embedded (DateFormats)
+3. Exclude from output if listed in IgnoreRegexes, skipping remaining steps
+4. Keep as-is if included in GreenlitRegexes, skipping further processing
+5. If groupable as per GroupableRegexes, reformat/regroup the message
+"""
 from __future__ import annotations
 
 import dataclasses
@@ -106,6 +117,11 @@ class GroupableRegexes:
             message_format="{context} lockRequest: pasynManager->queueRequest() failed: {reason}",
             extras=["pv"],
         ),
+        snmp_querylist_timeout=GroupJoiner(
+            pattern=re.compile(r'(?P<context>.*): Snmp QryList Timeout on (?P<pv>.*)'),
+            message_format="{context}: Snmp QryList Timeout",
+            extras=["pv"],
+        ),
     )
 
     @classmethod
@@ -136,15 +152,19 @@ class DateFormats:
     more easily.
     """
     standard: str = "%Y/%m/%d %H:%M:%S.%f"
+    # Found in ioc-xrt-m3h-switch
+    short: str = "%m/%d %H:%M:%S.%f"
 
-    @staticmethod
-    def find_timestamp(line: str) -> Tuple[Optional[datetime.datetime], str]:
+    _date_formats_: ClassVar[Dict[str, str]]
+
+    @classmethod
+    def find_timestamp(cls, line: str) -> Tuple[Optional[datetime.datetime], str]:
         # TODO: only support basic space delimiters for now
         split = line.strip().split(" ")
         date_portion = " ".join(split[:2])
         remainder = " ".join(split[2:])
 
-        for fmt in DATE_FORMATS.values():
+        for fmt in cls._date_formats_.values():
             try:
                 return datetime.datetime.strptime(date_portion, fmt), remainder
             except ValueError:
@@ -153,8 +173,7 @@ class DateFormats:
         return None, line
 
 
-DATE_FORMATS = dataclasses.asdict(DateFormats())
-IGNORE_REGEXES = dataclasses.asdict(IgnoreRegexes())
+DateFormats._date_formats_ = dataclasses.asdict(DateFormats())
 
 
 @dataclass(frozen=True)
