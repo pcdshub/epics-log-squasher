@@ -75,6 +75,7 @@ class File:
     last_update: float = field(default_factory=time.monotonic)
     lines: Deque[Tuple[float, str]] = field(default_factory=collections.deque)
     squasher: Squasher = field(default_factory=Squasher)
+    num_bytes_in: int = 0
     num_lines_in: int = 0
     buffer: str = ""
     short_name: str = ""
@@ -107,6 +108,7 @@ class File:
         if len(data) == 0:
             return
 
+        self.num_bytes_in += len(data)
         self.buffer, lines = _split_lines(self.buffer + data)
 
         ts = time.time()
@@ -157,31 +159,33 @@ class FileReaderThread:
         self._thread = threading.Thread(target=self.poll_loop, daemon=True)
         self._thread.start()
 
+    def _poll(self):
+        with self._lock:
+            files = list(self.files.values())
+
+        to_remove = []
+
+        for file in files:
+            file.read()
+            if file.elapsed_since_last_update > self.close_timeout:
+                to_remove.append(file)
+
+        with self._lock:
+            for file in to_remove:
+                logger.warning(
+                    "%s has not updated within the past %.1f seconds; closing "
+                    "and freeing up resources",
+                    file.filename,
+                    self.close_timeout,
+                )
+                file.close()
+                self.files.pop(file.filename)
+
     def poll_loop(self):
         logger.info("Poll loop started")
         while not self._stop_event.is_set():
             time.sleep(0)
-
-            with self._lock:
-                files = list(self.files.values())
-
-            to_remove = []
-
-            for file in files:
-                file.read()
-                if file.elapsed_since_last_update > self.close_timeout:
-                    to_remove.append(file)
-
-            with self._lock:
-                for file in to_remove:
-                    logger.warning(
-                        "%s has not updated within the past %.1f seconds; closing "
-                        "and freeing up resources",
-                        file.filename,
-                        self.close_timeout,
-                    )
-                    file.close()
-                    self.files.pop(file.filename)
+            self._poll()
 
     def stop(self):
         self._stop_event.set()
@@ -257,13 +261,15 @@ class GlobalMonitor:
         self,
         file_glob: str,
         name_regex: str = r"/cds/data/iocData/(?P<name>.*)/iocInfo/.*",
+        start_thread: bool = True,
     ):
         self.file_glob = file_glob
         self.files = {}
         self.stats = GlobalMonitorStatistics()
         self.name_regex = re.compile(name_regex)
         self.reader = FileReaderThread()
-        self.reader.start()
+        if start_thread:
+            self.reader.start()
 
     @property
     def monitored_files(self) -> List[str]:
@@ -304,8 +310,7 @@ class GlobalMonitor:
             # file.position = file.monitor.stat.st_size
             # logger.info("File %s Pos: %d of %d", fn, file.position, file.monitor.stat.st_size)
 
-    def squash(self):
-        num_in_bytes = 0
+    def squash(self, out_file=sys.stdout):
         num_out_bytes = 0
         num_lines_out = 0
         for fn in self.monitored_files:
@@ -313,18 +318,25 @@ class GlobalMonitor:
             if not file.lines:
                 continue
 
-            num_in_bytes += file.squasher.num_bytes
             squashed = file.squash()
 
             num_lines_out += len(squashed.lines)
             for line in squashed.lines:
                 output = f"{file.short_name} {line}"
-                print(output)
-                num_out_bytes += len(output)
+                print(output, file=out_file)
+                num_out_bytes += len(output) + 1  # include the newline
 
-        self.stats.bytes_in += num_in_bytes
         self.stats.bytes_out += num_out_bytes
         self.stats.lines_out += num_lines_out
+
+    def show_stats(self):
+        self.stats.bytes_in = sum(
+            file.num_bytes_in for file in self.files.values()
+        )
+        self.stats.lines_in = sum(
+            file.num_lines_in for file in self.files.values()
+        )
+        logger.info("Statistics: %s", str(self.stats))
 
     def run(
         self,
@@ -341,10 +353,7 @@ class GlobalMonitor:
             if do_squash.check():
                 self.squash()
             if show_stats.check():
-                self.stats.lines_in = sum(
-                    file.num_lines_in for file in self.files.values()
-                )
-                logger.info("Statistics: %s", str(self.stats))
+                self.show_stats()
 
             time.sleep(0.1)
 
