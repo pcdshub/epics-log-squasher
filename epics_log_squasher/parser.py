@@ -81,7 +81,7 @@ class GroupJoiner:
             for match in matches
             for extra in self.extras
         ]
-        if len(extras) > self.count_threshold:
+        if self.count_threshold >= 0 and len(extras) > self.count_threshold:
             extras = extras[:self.count_threshold]
             extras.append("...")
 
@@ -131,6 +131,12 @@ class GroupableRegexes:
             pattern=re.compile(r'errlog: (?P<count>\d+) messages were discarded'),
             message_format="errlog: messages were discarded",
             extras=["count"],
+        ),
+        active_scan_count=GroupJoiner(
+            pattern=re.compile(r'(?P<pv>.*) Active scan count exceeded!'),
+            message_format="Active scan count exceeded!",
+            extras=["pv"],
+            count_threshold=-1,  # include every PV name
         ),
     )
 

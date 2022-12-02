@@ -211,6 +211,15 @@ def test_squash(lines: str, expected: parser.Squashed):
             },
             id="errlog_spam",
         ),
+        pytest.param(
+            "pv Active scan count exceeded!",
+            "active_scan_count",
+            "Active scan count exceeded!",
+            {
+                "pv": "pv",
+            },
+            id="active_scan_count",
+        ),
     ],
 )
 def test_groupable_regexes(
