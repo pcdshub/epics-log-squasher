@@ -3,9 +3,8 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import re
-
 from dataclasses import dataclass, field
-from typing import ClassVar, Dict, List, Optional, Tuple
+from typing import ClassVar, Dict, List, Optional, Tuple, Union
 
 
 class Regexes:
@@ -40,7 +39,7 @@ class CleanRegexes(Regexes):
     # We largely care about foreground changes to red for errors, but let's be
     # a bit more generic than that:
     ansi_escape_codes: re.Pattern = re.compile(r'(?:\x1B[@-_]|[\x80-\x9F])[0-?]*[ -/]*[@-~]')
-   
+
 
 @dataclass
 class IgnoreRegexes(Regexes):
@@ -52,7 +51,7 @@ class IgnoreRegexes(Regexes):
 class GreenlitRegexes(Regexes):
     """Regular expressions for log lines that should always be recorded."""
     procserv_lines: re.Pattern = re.compile(r'^@@@ ')
-   
+
 
 @dataclass
 class GroupJoiner:
@@ -165,13 +164,20 @@ class IndexedString:
     value: str
 
     @classmethod
-    def from_string(cls, index: int, value: str) -> IndexedString:
+    def from_string(
+        cls, index: int, value: str, local_timestamp: Optional[float] = None
+    ) -> IndexedString:
         timestamp, line = DateFormats.find_timestamp(value)
         if timestamp is None:
-            # Insert our own timestamp if there is none
-            # Even if our timestamps are off, we still respect ordering
-            # by way of the "seen" index
-            timestamp = datetime.datetime.now()
+            if local_timestamp is not None:
+                # This could be the time it was read from the log file or time
+                # information determined some other way
+                timestamp = datetime.datetime.fromtimestamp(local_timestamp)
+            else:
+                # Insert our own timestamp if there is none
+                # Even if our timestamps are off, we still respect ordering
+                # by way of the "seen" index
+                timestamp = datetime.datetime.now()
 
         return IndexedString(
             index=index,
@@ -184,7 +190,7 @@ class IndexedString:
 
 
 def _split_indexes_and_groups(
-    messages: Union[IndexedString, GroupMatch]
+    messages: List[Union[IndexedString, GroupMatch]]
 ) -> Tuple[List[IndexedString], List[GroupMatch]]:
     indexes = []
     groups = []
@@ -211,9 +217,15 @@ class Squasher:
 
     _index: int = 0
 
-    def _create_indexed_string(self, value: str) -> IndexedString:
+    def _create_indexed_string(
+        self, value: str, local_timestamp: Optional[float] = None
+    ) -> IndexedString:
         self._index = (self._index + 1) % 1_000_000
-        return IndexedString.from_string(index=self._index, value=CleanRegexes.sub("", value))
+        return IndexedString.from_string(
+            index=self._index,
+            value=CleanRegexes.sub("", value),
+            local_timestamp=local_timestamp,
+        )
 
     def add_indexed_string(self, value: IndexedString):
         self.messages.append(value)
@@ -233,11 +245,11 @@ class Squasher:
         else:
             self.by_message.setdefault(value.value, []).append(match or value)
 
-    def add_lines(self, value: str):
+    def add_lines(self, value: str, local_timestamp: Optional[float] = None):
         for line in value.splitlines():
-            indexed = self._create_indexed_string(line.rstrip())
+            indexed = self._create_indexed_string(line.rstrip(), local_timestamp=local_timestamp)
             self.add_indexed_string(indexed)
-        
+
     def get_timespan(self) -> float:
         if len(self.by_timestamp) == 0:
             return 0.0
