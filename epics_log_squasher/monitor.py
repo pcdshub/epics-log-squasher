@@ -191,8 +191,26 @@ class FileReaderThread:
             self.files[file.filename] = file
 
 
+class PeriodicEvent:
+    def __init__(self, period: float):
+        self.period = period
+        self._last_time = time.monotonic()
+
+    @property
+    def is_ready(self) -> bool:
+        return (time.monotonic() - self._last_time) > self.period
+
+    def check(self) -> bool:
+        if self.is_ready:
+            self._last_time = time.monotonic()
+            return True
+        return False
+
+
 class GlobalMonitor:
     files: Dict[str, File]
+    num_in_bytes: int
+    num_out_bytes: int
 
     def __init__(
         self,
@@ -201,6 +219,8 @@ class GlobalMonitor:
     ):
         self.file_glob = file_glob
         self.files = {}
+        self.num_in_bytes = 0
+        self.num_out_bytes = 0
         self.name_regex = re.compile(name_regex)
         self.reader = FileReaderThread()
         self.reader.start()
@@ -245,26 +265,47 @@ class GlobalMonitor:
             # logger.info("File %s Pos: %d of %d", fn, file.position, file.monitor.stat.st_size)
 
     def squash(self):
+        num_in_bytes = 0
+        num_out_bytes = 0
         for fn in self.monitored_files:
             file = self.files[fn]
             if not file.lines:
                 continue
 
+            num_in_bytes += file.squasher.num_bytes
             squashed = file.squash()
             for line in squashed.lines:
-                print(file.short_name, line)
+                output = f"{file.short_name} {line}"
+                print(output)
+                num_out_bytes += len(output)
 
-    def run(self, file_check_period: float = 1.0, squash_period: float = 10.0):
-        last_check = 0.0
-        last_squash = 0.0
+        self.num_in_bytes += num_in_bytes
+        self.num_out_bytes += num_out_bytes
+
+    def show_statistics(self):
+        if self.num_in_bytes <= 0:
+            percent = 1.0
+        else:
+            percent = (self.num_out_bytes / self.num_in_bytes) * 100.
+
+        logger.info("Statistics: bytes in %d bytes out %d (%.2f %%)", self.num_in_bytes, self.num_out_bytes, percent)
+
+    def run(
+        self,
+        file_check_period: float = 1.0,
+        squash_period: float = 10.0,
+        show_statistics_period: float = 60.0,
+    ):
+        file_check = PeriodicEvent(file_check_period)
+        do_squash = PeriodicEvent(squash_period)
+        show_stats = PeriodicEvent(show_statistics_period)
         while True:
-            if time.monotonic() - last_check > file_check_period:
+            if file_check.check():
                 self.update()
-                last_check = time.monotonic()
-
-            if time.monotonic() - last_squash > squash_period:
+            if do_squash.check():
                 self.squash()
-                last_squash = time.monotonic()
+            if show_stats.check():
+                self.show_statistics()
 
             time.sleep(0.1)
 

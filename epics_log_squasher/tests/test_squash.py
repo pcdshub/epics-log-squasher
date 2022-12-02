@@ -1,9 +1,8 @@
+import datetime
+import textwrap
 from typing import Dict
 
 import pytest
-import textwrap
-
-import datetime
 
 from .. import parser
 
@@ -164,6 +163,35 @@ def test_squash(lines: str, expected: parser.Squashed):
                 "reason": "some reason",
             },
             id="asyn_connect_failed",
+        ),
+        pytest.param(
+            "ctx: Snmp QryList Timeout on pv",
+            "snmp_querylist_timeout",
+            "ctx: Snmp QryList Timeout",
+            {
+                "pv": "pv",
+                "context": "ctx",
+            },
+            id="snmp_querylist_timeout",
+        ),
+        pytest.param(
+            "Record [XRT:R44:PWR:20:Sensor:2:GetStatus] received error code [0x00040000]!",
+            "snmp_error_code",
+            "Received error code 0x00040000",
+            {
+                "pv": "XRT:R44:PWR:20:Sensor:2:GetStatus",
+                "code": "0x00040000",
+            },
+            id="snmp_error_code",
+        ),
+        pytest.param(
+            "errlog: 661 messages were discarded",
+            "errlog_spam",
+            "errlog: messages were discarded",
+            {
+                "count": "661",
+            },
+            id="errlog_spam",
         ),
     ],
 )

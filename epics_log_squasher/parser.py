@@ -122,6 +122,16 @@ class GroupableRegexes:
             message_format="{context}: Snmp QryList Timeout",
             extras=["pv"],
         ),
+        snmp_error_code=GroupJoiner(
+            pattern=re.compile(r'Record \[(?P<pv>.*)\] received error code \[(?P<code>.*)\]!'),
+            message_format="Received error code {code}",
+            extras=["pv"],
+        ),
+        errlog_spam=GroupJoiner(
+            pattern=re.compile(r'errlog: (?P<count>\d+) messages were discarded'),
+            message_format="errlog: messages were discarded",
+            extras=["count"],
+        ),
     )
 
     @classmethod
@@ -231,6 +241,7 @@ class Squasher:
     by_timestamp: Dict[int, List[Union[IndexedString, GroupMatch]]] = field(default_factory=dict)
     by_message: Dict[str, List[Union[IndexedString, GroupMatch]]] = field(default_factory=dict)
     messages: List[IndexedString] = field(default_factory=list)
+    num_bytes: int = 0
     period_sec: float = 10.0
     messages_per_sec_threshold: float = 1.0
 
@@ -265,6 +276,7 @@ class Squasher:
             self.by_message.setdefault(value.value, []).append(match or value)
 
     def add_lines(self, value: str, local_timestamp: Optional[float] = None):
+        self.num_bytes += len(value)
         for line in value.splitlines():
             indexed = self._create_indexed_string(line.rstrip(), local_timestamp=local_timestamp)
             self.add_indexed_string(indexed)
