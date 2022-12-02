@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections
+import datetime
 import glob
 import io
 import logging
@@ -74,6 +75,7 @@ class File:
     last_update: float = field(default_factory=time.monotonic)
     lines: Deque[Tuple[float, str]] = field(default_factory=collections.deque)
     squasher: Squasher = field(default_factory=Squasher)
+    num_lines_in: int = 0
     buffer: str = ""
     short_name: str = ""
 
@@ -112,6 +114,7 @@ class File:
             self.lines.append((ts, line))
             # logger.info("%s %s", self.short_name, line)
 
+        self.num_lines_in += len(lines)
         self.monitor.position = self.fp.tell()
         self.last_update = time.monotonic()
         # logger.info(
@@ -207,10 +210,48 @@ class PeriodicEvent:
         return False
 
 
+@dataclass
+class GlobalMonitorStatistics:
+    startup_time: float = field(default_factory=time.monotonic)
+    bytes_in: int = 0
+    bytes_out: int = 0
+    lines_in: int = 0
+    lines_out: int = 0
+
+    @property
+    def bytes_percent(self) -> float:
+        if self.bytes_in <= 0:
+            return 1.0
+        return (self.bytes_out / self.bytes_in) * 100.
+
+    @property
+    def lines_percent(self) -> float:
+        if self.lines_in <= 0:
+            return 1.0
+        return (self.lines_out / self.lines_in) * 100.
+
+    @property
+    def elapsed_time(self) -> float:
+        return time.monotonic() - self.startup_time
+
+    @property
+    def elapsed_time_timedelta(self) -> datetime.timedelta:
+        return datetime.timedelta(seconds=self.elapsed_time)
+
+    def __str__(self) -> str:
+        return (
+            f"Running for {self.elapsed_time_timedelta}: "
+            f"{self.bytes_in} bytes in "
+            f"-> {self.bytes_out} bytes out "
+            f"({self.bytes_percent:.2f} %). "
+            f"{self.lines_in} lines in "
+            f"-> {self.lines_out} lines out "
+            f"({self.lines_percent:.2f} %)"
+        )
+
+
 class GlobalMonitor:
     files: Dict[str, File]
-    num_in_bytes: int
-    num_out_bytes: int
 
     def __init__(
         self,
@@ -219,8 +260,7 @@ class GlobalMonitor:
     ):
         self.file_glob = file_glob
         self.files = {}
-        self.num_in_bytes = 0
-        self.num_out_bytes = 0
+        self.stats = GlobalMonitorStatistics()
         self.name_regex = re.compile(name_regex)
         self.reader = FileReaderThread()
         self.reader.start()
@@ -267,6 +307,7 @@ class GlobalMonitor:
     def squash(self):
         num_in_bytes = 0
         num_out_bytes = 0
+        num_lines_out = 0
         for fn in self.monitored_files:
             file = self.files[fn]
             if not file.lines:
@@ -274,21 +315,16 @@ class GlobalMonitor:
 
             num_in_bytes += file.squasher.num_bytes
             squashed = file.squash()
+
+            num_lines_out += len(squashed.lines)
             for line in squashed.lines:
                 output = f"{file.short_name} {line}"
                 print(output)
                 num_out_bytes += len(output)
 
-        self.num_in_bytes += num_in_bytes
-        self.num_out_bytes += num_out_bytes
-
-    def show_statistics(self):
-        if self.num_in_bytes <= 0:
-            percent = 1.0
-        else:
-            percent = (self.num_out_bytes / self.num_in_bytes) * 100.
-
-        logger.info("Statistics: bytes in %d bytes out %d (%.2f %%)", self.num_in_bytes, self.num_out_bytes, percent)
+        self.stats.bytes_in += num_in_bytes
+        self.stats.bytes_out += num_out_bytes
+        self.stats.lines_out += num_lines_out
 
     def run(
         self,
@@ -305,7 +341,10 @@ class GlobalMonitor:
             if do_squash.check():
                 self.squash()
             if show_stats.check():
-                self.show_statistics()
+                self.stats.lines_in = sum(
+                    file.num_lines_in for file in self.files.values()
+                )
+                logger.info("Statistics: %s", str(self.stats))
 
             time.sleep(0.1)
 
