@@ -41,24 +41,24 @@ def test_global_monitor():
     file.short_name = "short_name"
     assert file.filename == log.filename
 
-    log.write_line("hello")
-    log.write_line("hello")
-    log.write_line("hello")
+    count = 10
+    for _ in range(count):
+        log.write_line("hello")
+
     mon.update()
     mon.reader._poll()
-    assert file.num_lines_in == 3
-    assert file.num_lines_in == 3
+    assert file.num_lines_in == count
     assert len(mon.monitored_files) == 1
 
     with io.StringIO() as fp:
         mon.squash(out_file=fp)
         results = fp.getvalue()
 
-    expected = "short_name [3x] hello\n"
+    expected = f"short_name [{count}x] hello\n"
     assert results == expected
 
-    mon.show_stats()
+    mon.update_stats()
     assert mon.stats.bytes_in == log.bytes_written
     assert mon.stats.bytes_out == len(expected)
-    assert mon.stats.lines_in == 3
+    assert mon.stats.lines_in == count
     assert mon.stats.lines_out == 1

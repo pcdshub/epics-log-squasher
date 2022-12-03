@@ -108,20 +108,16 @@ class File:
         if len(data) == 0:
             return
 
-        self.num_bytes_in += len(data)
         self.buffer, lines = _split_lines(self.buffer + data)
+        self.num_bytes_in += len(data)
+        self.num_lines_in += len(lines)
 
         ts = time.time()
         for line in lines:
             self.lines.append((ts, line))
-            # logger.info("%s %s", self.short_name, line)
 
-        self.num_lines_in += len(lines)
         self.monitor.position = self.fp.tell()
         self.last_update = time.monotonic()
-        # logger.info(
-        #     "%s has %d bytes buffered", self.filename, sum(len(b) for b in self.buffer)
-        # )
 
     def squash(self) -> Squashed:
         while self.lines:
@@ -268,6 +264,7 @@ class GlobalMonitor:
         self.stats = GlobalMonitorStatistics()
         self.name_regex = re.compile(name_regex)
         self.reader = FileReaderThread()
+        self._stop_event = threading.Event()
         if start_thread:
             self.reader.start()
 
@@ -329,14 +326,13 @@ class GlobalMonitor:
         self.stats.bytes_out += num_out_bytes
         self.stats.lines_out += num_lines_out
 
-    def show_stats(self):
+    def update_stats(self):
         self.stats.bytes_in = sum(
             file.num_bytes_in for file in self.files.values()
         )
         self.stats.lines_in = sum(
             file.num_lines_in for file in self.files.values()
         )
-        logger.info("Statistics: %s", str(self.stats))
 
     def run(
         self,
@@ -347,15 +343,20 @@ class GlobalMonitor:
         file_check = PeriodicEvent(file_check_period)
         do_squash = PeriodicEvent(squash_period)
         show_stats = PeriodicEvent(show_statistics_period)
-        while True:
+        while not self._stop_event.is_set():
             if file_check.check():
                 self.update()
             if do_squash.check():
                 self.squash()
             if show_stats.check():
-                self.show_stats()
+                self.update_stats()
+                logger.info("Statistics: %s", str(self.stats))
 
             time.sleep(0.1)
+
+    def stop(self):
+        self._stop_event.set()
+        self.reader.stop()
 
 
 if __name__ == "__main__":
