@@ -120,6 +120,7 @@ class File:
         self.last_update = time.monotonic()
 
     def squash(self) -> Squashed:
+        self.squasher = Squasher()
         while self.lines:
             # Atomic popping of lines to avoid locking
             local_timestamp, line = self.lines.popleft()
@@ -195,9 +196,14 @@ class FileReaderThread:
 
 
 class PeriodicEvent:
-    def __init__(self, period: float):
+    def __init__(self, period: float, ready_at_start: bool = False):
         self.period = period
-        self._last_time = time.monotonic()
+        self.ready_at_start = ready_at_start
+
+        if ready_at_start:
+            self._last_time = time.monotonic() - period
+        else:
+            self._last_time = time.monotonic()
 
     @property
     def is_ready(self) -> bool:
@@ -217,6 +223,12 @@ class GlobalMonitorStatistics:
     bytes_out: int = 0
     lines_in: int = 0
     lines_out: int = 0
+
+    def clear(self):
+        self.bytes_in = 0
+        self.bytes_out = 0
+        self.lines_in = 0
+        self.lines_out = 0
 
     @property
     def bytes_percent(self) -> float:
@@ -307,9 +319,11 @@ class GlobalMonitor:
             # file.position = file.monitor.stat.st_size
             # logger.info("File %s Pos: %d of %d", fn, file.position, file.monitor.stat.st_size)
 
-    def squash(self, out_file=sys.stdout):
+    def squash(self, out_file=sys.stdout, raw_out_file=None):
         num_out_bytes = 0
         num_lines_out = 0
+        num_bytes_in = 0
+        num_lines_in = 0
         for fn in self.monitored_files:
             file = self.files[fn]
             if not file.lines:
@@ -317,40 +331,45 @@ class GlobalMonitor:
 
             squashed = file.squash()
 
+            if raw_out_file is not None:
+                for line in file.squasher.messages:
+                    print(f"{file.short_name} {line.value}", file=raw_out_file)
+
+            num_bytes_in += file.squasher.num_bytes
+            num_lines_in += len(file.squasher.messages)
             num_lines_out += len(squashed.lines)
             for line in squashed.lines:
                 output = f"{file.short_name} {line}"
                 print(output, file=out_file)
                 num_out_bytes += len(output) + 1  # include the newline
 
+        self.stats.bytes_in += num_bytes_in
         self.stats.bytes_out += num_out_bytes
-        self.stats.lines_out += num_lines_out
 
-    def update_stats(self):
-        self.stats.bytes_in = sum(
-            file.num_bytes_in for file in self.files.values()
-        )
-        self.stats.lines_in = sum(
-            file.num_lines_in for file in self.files.values()
-        )
+        self.stats.lines_in += num_lines_in
+        self.stats.lines_out += num_lines_out
 
     def run(
         self,
         file_check_period: float = 1.0,
-        squash_period: float = 10.0,
-        show_statistics_period: float = 60.0,
+        squash_period: float = 30.0,
+        show_statistics_after: int = 2,
     ):
-        file_check = PeriodicEvent(file_check_period)
+        file_check = PeriodicEvent(file_check_period, ready_at_start=True)
         do_squash = PeriodicEvent(squash_period)
-        show_stats = PeriodicEvent(show_statistics_period)
+        squashed_count = 0
+        # raw_out_file = open("raw-output.txt", "wt")
         while not self._stop_event.is_set():
             if file_check.check():
                 self.update()
             if do_squash.check():
                 self.squash()
-            if show_stats.check():
-                self.update_stats()
-                logger.info("Statistics: %s", str(self.stats))
+                sys.stdout.flush()
+                squashed_count += 1
+                # raw_out_file.flush()
+                if squashed_count == show_statistics_after:
+                    logger.info("Statistics: %s", str(self.stats))
+                    squashed_count = 0
 
             time.sleep(0.1)
 
@@ -362,4 +381,7 @@ class GlobalMonitor:
 if __name__ == "__main__":
     logging.basicConfig(level="DEBUG")
     monitor = GlobalMonitor(file_glob=sys.argv[1])
-    monitor.run()
+    try:
+        monitor.run()
+    except KeyboardInterrupt:
+        ...

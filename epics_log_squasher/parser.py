@@ -306,7 +306,12 @@ class Squasher:
             self.by_message.setdefault(value.value, []).append(match or value)
 
     def add_lines(self, value: str, local_timestamp: Optional[float] = None):
-        self.num_bytes += len(value)
+        if "\n" in value:
+            self.num_bytes += len(value)
+        else:
+            # TODO: mostly for test suite
+            self.num_bytes += len(value) + 1
+
         for line in value.splitlines():
             indexed = self._create_indexed_string(line.rstrip(), local_timestamp=local_timestamp)
             self.add_indexed_string(indexed)

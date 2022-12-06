@@ -32,33 +32,45 @@ class MockLogFile:
 
 
 def test_global_monitor():
-    log = MockLogFile()
+    mock_log_file = MockLogFile()
 
-    mon = monitor.GlobalMonitor(file_glob=log.filename, start_thread=False)
+    mon = monitor.GlobalMonitor(
+        file_glob=mock_log_file.filename,
+        start_thread=False,
+    )
     mon.update()
 
     file, = list(mon.files.values())
     file.short_name = "short_name"
-    assert file.filename == log.filename
+    assert file.filename == mock_log_file.filename
 
-    count = 10
-    for _ in range(count):
-        log.write_line("hello")
+    def clear_statistics():
+        mock_log_file.lines_written = 0
+        mock_log_file.bytes_written = 0
+        for file_ in mon.files.values():
+            file_.num_lines_in = 0
+        mon.stats.clear()
 
-    mon.update()
-    mon.reader._poll()
-    assert file.num_lines_in == count
-    assert len(mon.monitored_files) == 1
+    for count in [2, 5, 10]:
+        # Reset our statistics
+        clear_statistics()
 
-    with io.StringIO() as fp:
-        mon.squash(out_file=fp)
-        results = fp.getvalue()
+        for _ in range(count):
+            mock_log_file.write_line("hello")
 
-    expected = f"short_name [{count}x] hello\n"
-    assert results == expected
+        mon.update()
+        mon.reader._poll()
+        assert file.num_lines_in == count
+        assert len(mon.monitored_files) == 1
 
-    mon.update_stats()
-    assert mon.stats.bytes_in == log.bytes_written
-    assert mon.stats.bytes_out == len(expected)
-    assert mon.stats.lines_in == count
-    assert mon.stats.lines_out == 1
+        with io.StringIO() as fp:
+            mon.squash(out_file=fp)
+            results = fp.getvalue()
+
+        expected = f"short_name [{count}x] hello\n"
+        assert results == expected
+
+        assert mon.stats.bytes_in == mock_log_file.bytes_written
+        assert mon.stats.bytes_out == len(expected)
+        assert mon.stats.lines_in == count
+        assert mon.stats.lines_out == 1
