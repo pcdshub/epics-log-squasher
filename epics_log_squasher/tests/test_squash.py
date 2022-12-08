@@ -328,6 +328,50 @@ def test_groupable_regexes(
             ),
             id="procserv_status_update",
         ),
+        pytest.param(
+            """\
+            @@@ @@@ @@@ @@@ @@@
+            @@@ Received a sigChild for process 28147. Normal exit status = 126
+            @@@ Current time: Thu Dec  8 15:12:25 2022
+            @@@ Child process is shutting down, a new one will be restarted shortly
+            @@@ ^R or ^X restarts the child, ^Q quits the server
+            @@@ Restarting child "ioc-cxi-protura"
+            @@@    (as /reg/g/pcds/pyps/config/cxi/iocmanager/startProc)
+            @@@ The PID of new child "ioc-cxi-protura" is: 28320
+            @@@ @@@ @@@ @@@ @@@
+            """,
+            Message.from_dict(
+                message="procServ status update",
+                info={
+                    "pid": ["28147"],
+                    "exit_code": ["126"],
+                    "timestamp": ["Thu Dec  8 15:12:25 2022"],
+                    "procserv_iocname": ["ioc-cxi-protura"],
+                    "process": ["/reg/g/pcds/pyps/config/cxi/iocmanager/startProc"],
+                    "new_pid": ["28320"],
+                },
+                source_lines=9,
+            ),
+            id="procserv_status_update",
+        ),
+        pytest.param(
+            """\
+            @@@ @@@ @@@ @@@ @@@
+            @@@ Received a sigChild for process 150853. The process was killed by signal 9
+            @@@ Toggled auto restart mode to ONESHOT
+            @@@ @@@ @@@ @@@ @@@
+            """,
+            Message.from_dict(
+                message="procServ status update",
+                info={
+                    "pid": ["150853"],
+                    "signal": ["9"],
+                    "restart_mode": ["ONESHOT"],
+                },
+                source_lines=4,
+            ),
+            id="procserv_status_update",
+        ),
     ],
 )
 def test_multiline_groupable_regexes(
