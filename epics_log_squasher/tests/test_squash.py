@@ -275,8 +275,48 @@ def test_groupable_regexes(
         timestamp=datetime.datetime.now(),
         value=source_message,
     )
-    match = parser.GroupableRegexes.group_fullmatch(idx)
+    match = parser.SingleLineGroupableRegexes.group_fullmatch(idx)
     assert match is not None
     assert match.message == expected_message
     assert match.name == group
     assert match.groupdict == groupdict
+
+
+@pytest.mark.parametrize(
+    "source_message, group, expected_message, groupdict",
+    [
+        pytest.param(
+            """\
+            @@@ @@@ @@@ @@@ @@@
+            @@@ Received a sigChild for process 16392. Normal exit status = 127
+            @@@ Current time: Fri Dec  2 16:41:19 2022
+            @@@ Child process is shutting down, a new one will be restarted shortly
+            @@@ ^R or ^X restarts the child, ^Q quits the server
+            @@@ @@@ @@@ @@@ @@@
+            """,
+            "procserv_status_update",
+            "procServ status update",
+            {
+                "pid": "16392",
+                "exit_code": "127",
+                "timestamp": "Fri Dec  2 16:41:19 2022",
+            },
+            id="procserv_status_update",
+        ),
+    ],
+)
+def test_multiline_groupable_regexes(
+    source_message: str,
+    group: str,
+    expected_message: str,
+    groupdict: Dict[str, str],
+):
+    squasher = parser.Squasher()
+    squasher.add_lines(textwrap.dedent(source_message.rstrip()))
+    squashed = squasher.squash()
+    assert squasher.multiline_match is None
+    assert len(squashed.lines) == 1
+    # assert match is not None
+    # assert match.message == expected_message
+    # assert match.name == group
+    # assert match.groupdict == groupdict

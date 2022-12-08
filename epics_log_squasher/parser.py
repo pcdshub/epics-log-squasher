@@ -7,12 +7,13 @@ Pipeline is roughly:
 2. Pre-process to extract a timestamp, if embedded (DateFormats)
 3. Exclude from output if listed in IgnoreRegexes, skipping remaining steps
 4. Keep as-is if included in GreenlitRegexes, skipping further processing
-5. If groupable as per GroupableRegexes, reformat/regroup the message
+5. If groupable as per SingleLineGroupableRegexes, reformat/regroup the message
 """
 from __future__ import annotations
 
 import dataclasses
 import datetime
+import enum
 import functools
 import re
 from dataclasses import dataclass, field
@@ -31,7 +32,11 @@ class Regexes:
     def __init_subclass__(cls):
         super().__init_subclass__()
         # This is a bit of an awkward hack, but leaving it in for now:
-        cls._regexes_ = dataclasses.asdict(dataclass(cls)())
+        cls._regexes_ = {
+            key: value
+            for key, value in dataclasses.asdict(dataclass(cls)()).items()
+            if isinstance(value, re.Pattern)
+        }
 
     @classmethod
     def fullmatch(cls, line: str) -> bool:
@@ -100,7 +105,7 @@ class GroupMatch:
 
 
 @dataclass
-class GroupableRegexes:
+class SingleLineGroupableRegexes:
     """Regular expressions for log lines that can be grouped."""
     groups: ClassVar[Dict[str, GroupJoiner]] = dict(
         stream_protocol_aborted=GroupJoiner(
@@ -149,12 +154,108 @@ class GroupableRegexes:
                 continue
 
             groupdict = match.groupdict()
-            joiner = cls.groups[group]
             return GroupMatch(
                 name=group,
                 message=joiner.message_format.format(**groupdict),
                 source=idx,
                 groupdict=groupdict,
+            )
+
+        return None
+
+
+@dataclass
+class MultilineGroupJoiner:
+    start_pattern: re.Pattern
+    inner_patterns: List[re.Pattern]
+    end_pattern: re.Pattern
+    message_format: str
+
+
+class MultilineMatchState(enum.Enum):
+    #: Default initial state
+    init = enum.auto()
+    #: Saw start line
+    start = enum.auto()
+    #: Checking inner lines now
+    inner = enum.auto()
+    #: Saw end line
+    end = enum.auto()
+    #: Saw start and then failed to match an inner line (error exit)
+    unmatched = enum.auto()
+
+
+@dataclass
+class MultilineGroupMatch:
+    name: str
+    state: MultilineMatchState = MultilineMatchState.init
+    source: List[IndexedString] = field(default_factory=list)
+    groupdict: Dict[str, List[str]] = field(default_factory=dict)
+
+    def join(self) -> Dict[str, Union[str, List[str]]]:
+        group = MultiLineGroupableRegexes.groups[self.name]
+        return dict(
+            msg=group.message_format.format(**self.groupdict),
+            **self.groupdict,
+        )
+
+
+def _append_groupdict(existing: Dict[str, List[str]], add: Dict[str, str]) -> None:
+    for key, value in add.items():
+        existing.setdefault(key, []).append(value)
+
+
+@dataclass
+class MultiLineGroupableRegexes:
+    """Regular expressions for context-sensitive log lines that can be grouped."""
+    groups: ClassVar[Dict[str, MultilineGroupJoiner]] = dict(
+        procserv_status_update=MultilineGroupJoiner(
+            message_format="procServ status update",
+            start_pattern=re.compile(r'@@@ @@@ @@@ @@@ @@@'), 
+            inner_patterns=[
+                re.compile(r'@@@ Received a sigChild for process (?P<pid>\d+). Normal exit status = (?P<exit_code>\d+)'), 
+                re.compile(r'@@@ Current time: (?P<timestamp>.*)'), 
+                re.compile(r'@@@ Child process is shutting down, a new one will be restarted shortly'), 
+                re.compile(r'@@@ \^R or \^X restarts the child, \^Q quits the server'), 
+            ],
+            end_pattern=re.compile(r'@@@ @@@ @@@ @@@ @@@'), 
+        ),
+    )
+
+    @classmethod
+    def group_fullmatch(cls, state: Optional[MultilineGroupMatch], idx: IndexedString) -> Optional[MultilineGroupMatch]:
+        if state is not None:
+            joiner = cls.groups[state.name]
+            for pattern in joiner.inner_patterns:
+                match = pattern.fullmatch(idx.value)
+                if match is not None:
+                    state.source.append(idx)
+                    _append_groupdict(state.groupdict, match.groupdict())
+                    return state
+
+            match = joiner.end_pattern.fullmatch(idx.value)
+            if match is not None:
+                _append_groupdict(state.groupdict, match.groupdict())
+                state.state = MultilineMatchState.end
+                return None
+
+            # We're out of the group and we didn't see a recognized line
+            state.state = MultilineMatchState.unmatched
+            return None
+                
+        for group, joiner in cls.groups.items():
+            match = joiner.start_pattern.fullmatch(idx.value)
+            if match is None:
+                continue
+
+            return MultilineGroupMatch(
+                name=group,
+                source=[idx],
+                state=MultilineMatchState.start,
+                groupdict={
+                    key: [value]
+                    for key, value in match.groupdict().items()
+                }
             )
 
         return None
@@ -268,11 +369,11 @@ def _split_indexes_and_groups(
 
 @dataclass
 class Squasher:
-    by_timestamp: Dict[int, List[Union[IndexedString, GroupMatch]]] = field(default_factory=dict)
+    # by_timestamp: Dict[int, List[Union[IndexedString, GroupMatch]]] = field(default_factory=dict)
     by_message: Dict[str, List[Union[IndexedString, GroupMatch]]] = field(default_factory=dict)
     messages: List[IndexedString] = field(default_factory=list)
+    multiline_match: Optional[MultilineGroupMatch] = None
     num_bytes: int = 0
-    period_sec: float = 10.0
     messages_per_sec_threshold: float = 1.0
 
     _index: int = 0
@@ -287,17 +388,55 @@ class Squasher:
             local_timestamp=local_timestamp,
         )
 
+    def add_multiline_match(self, match: MultilineGroupMatch):
+        if not match.source:
+            return
+
+        if match.state != MultilineMatchState.end:
+            for line in match.source:
+                self._add_indexed_string(
+                    line,
+                    allow_multiline=False
+                )
+            return
+
+        first = match.source[0]
+        self._add_indexed_string(
+            IndexedString(
+                index=first.index,
+                timestamp=first.timestamp,
+                value=str(match.join()),  # TODO
+            ),
+            allow_multiline=False
+        )
+
     def add_indexed_string(self, value: IndexedString):
         self.messages.append(value)
         if IgnoreRegexes.fullmatch(value.value):
             return
 
+        self._add_indexed_string(value)
+
+    def _add_indexed_string(self, value: IndexedString, *, allow_multiline: bool = True):
         # Bin posix timestamps by the second:
         ts = int(value.timestamp.timestamp())
-        self.by_timestamp.setdefault(ts, []).append(value)
-        # ts = ts - (ts % self.period_sec)
+        # self.by_timestamp.setdefault(ts, []).append(value)
 
-        match = GroupableRegexes.group_fullmatch(value)
+        if allow_multiline:
+            last_match = self.multiline_match
+            self.multiline_match = MultiLineGroupableRegexes.group_fullmatch(last_match, value)
+            if last_match is not None:
+                if self.multiline_match is not last_match:
+                    self.add_multiline_match(last_match)
+                if self.multiline_match is None and last_match.state == MultilineMatchState.end:
+                    # We finished a multiline group. Don't process the final line.
+                    return
+
+            if self.multiline_match is not None:
+                # We're in a multiline group; don't process it further
+                return
+
+        match = SingleLineGroupableRegexes.group_fullmatch(value)
 
         if match is not None:
             # Add the groupmatch, not the individual message
@@ -316,10 +455,10 @@ class Squasher:
             indexed = self._create_indexed_string(line.rstrip(), local_timestamp=local_timestamp)
             self.add_indexed_string(indexed)
 
-    def get_timespan(self) -> float:
-        if len(self.by_timestamp) == 0:
-            return 0.0
-        return (max(self.by_timestamp) - min(self.by_timestamp)) + 1
+    # def get_timespan(self) -> float:
+    #     if len(self.by_timestamp) == 0:
+    #         return 0.0
+    #     return (max(self.by_timestamp) - min(self.by_timestamp)) + 1
 
     def squash(self) -> Squashed:
         squashed = []
@@ -348,7 +487,7 @@ class Squasher:
 
             if groups:
                 first = groups[0]
-                joiner = GroupableRegexes.groups[first.name]
+                joiner = SingleLineGroupableRegexes.groups[first.name]
                 squashed.append(
                     IndexedString(
                         value=joiner.join(groups),
@@ -360,8 +499,15 @@ class Squasher:
         def by_index(value: IndexedString) -> int:
             return value.index
 
+        if self.multiline_match is not None:
+            # Inside a multiline match: what to do?
+            # Continue next time, right?
+            # TODO
+            self.add_multiline_match(self.multiline_match)
+
+        lines = [item.value for item in sorted(squashed, key=by_index)]
         return Squashed(
-            lines=[item.value for item in sorted(squashed, key=by_index)],
+            lines=lines,
             source_lines=len(self.messages),
         )
 
