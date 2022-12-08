@@ -72,7 +72,9 @@ def test_global_monitor():
         expected = f"[{count}x] hello"
         assert expected in results
 
-        full_message_length = len(json.dumps(Message(message=expected).asdict())) + 1
+        expected_full = Message(message=expected).asdict()
+        expected_full["ioc"] = "short_name"
+        full_message_length = len(json.dumps(expected_full)) + 1
         assert mon.stats.bytes_in == mock_log_file.bytes_written
         assert mon.stats.bytes_out == full_message_length
         assert mon.stats.lines_in == count

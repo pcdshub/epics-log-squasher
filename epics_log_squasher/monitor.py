@@ -340,7 +340,9 @@ class GlobalMonitor:
             num_lines_in += len(file.squasher.messages)
             num_lines_out += len(squashed)
             for line in squashed:
-                output = json.dumps(line.asdict())
+                line_dict = line.asdict()
+                line_dict["ioc"] = file.short_name
+                output = json.dumps(line_dict)
                 print(output, file=out_file)
                 num_out_bytes += len(output) + 1  # include the newline
 
