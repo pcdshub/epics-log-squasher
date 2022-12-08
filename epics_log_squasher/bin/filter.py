@@ -3,6 +3,7 @@
 """
 
 import argparse
+import json
 import sys
 import threading
 import time
@@ -58,12 +59,12 @@ def main(period: float = 10.0):
 
             squash = Squasher()
             squash.add_lines("\n".join(acquired))
-            squashed = squash.squash()
+            squashed = [json.dumps(line.asdict()) for line in squash.squash()]
 
             bytes_raw += sum(len(line) for line in acquired)
-            bytes_filtered += sum(len(line) for line in squashed.lines)
+            bytes_filtered += sum(len(line) for line in squashed)
 
-            for line in squashed.lines:
+            for line in squashed:
                 print(line)
             print(f"({bytes_raw} -> {bytes_filtered} bytes)", file=sys.stderr)
     except KeyboardInterrupt:
