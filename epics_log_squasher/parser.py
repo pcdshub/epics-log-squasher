@@ -279,7 +279,7 @@ class MultiLineGroupableRegexes:
             inner_patterns=[
                 re.compile(r'@@@ Received a sigChild for process (?P<pid>\d+). Normal exit status = (?P<exit_code>\d+)'),
                 re.compile(r'@@@ Received a sigChild for process (?P<pid>\d+). The process was killed by signal (?P<signal>\d+)'),
-                re.compile(r'@@@ Current time: (?P<timestamp>.*)'),
+                re.compile(r'@@@ Current time: (?P<procserv_ts>.*)'),
                 re.compile(r'@@@ Child process is shutting down, a new one will be restarted shortly'),
                 re.compile(r'@@@ \^R or \^X restarts the child, \^Q quits the server'),
                 re.compile(r'@@@ Restarting child "(?P<procserv_iocname>.*)"'),

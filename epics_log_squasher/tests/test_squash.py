@@ -210,6 +210,7 @@ test_cases = [
 
 
 def compare_results(results: List[Message], all_expected: List[Message]):
+    assert len(results) == len(all_expected)
     for idx, (generated, expected) in enumerate(zip(results, all_expected)):
         assert generated.message == expected.message, f"Message from index {idx}"
         assert generated.info == expected.info, f"Info metadata from index {idx}"
@@ -322,7 +323,7 @@ def test_groupable_regexes(
                 info={
                     "pid": ["16392"],
                     "exit_code": ["127"],
-                    "timestamp": ["Fri Dec  2 16:41:19 2022"],
+                    "procserv_ts": ["Fri Dec  2 16:41:19 2022"],
                 },
                 source_lines=6,
             ),
@@ -345,7 +346,7 @@ def test_groupable_regexes(
                 info={
                     "pid": ["28147"],
                     "exit_code": ["126"],
-                    "timestamp": ["Thu Dec  8 15:12:25 2022"],
+                    "procserv_ts": ["Thu Dec  8 15:12:25 2022"],
                     "procserv_iocname": ["ioc-cxi-protura"],
                     "process": ["/reg/g/pcds/pyps/config/cxi/iocmanager/startProc"],
                     "new_pid": ["28320"],
@@ -369,6 +370,32 @@ def test_groupable_regexes(
                     "restart_mode": ["ONESHOT"],
                 },
                 source_lines=4,
+            ),
+            id="procserv_status_update",
+        ),
+        pytest.param(
+            """\
+            @@@ @@@ @@@ @@@ @@@
+            @@@ Received a sigChild for process 27111. Normal exit status = 127
+            @@@ Current time: Thu Dec  8 15:29:34 2022
+            @@@ Child process is shutting down, a new one will be restarted shortly
+            @@@ ^R or ^X restarts the child, ^Q quits the server
+            @@@ Restarting child "ioc-cxi-rec01-evr"
+            @@@    (as /reg/g/pcds/pyps/config/cxi/iocmanager/startProc)
+            @@@ The PID of new child "ioc-cxi-rec01-evr" is: 27511
+            @@@ @@@ @@@ @@@ @@@
+            """,
+            Message.from_dict(
+                message="procServ status update",
+                info={
+                    "pid": ["27111"],
+                    "exit_code": ["127"],
+                    "procserv_ts": ["Thu Dec  8 15:29:34 2022"],
+                    "procserv_iocname": ["ioc-cxi-rec01-evr"],
+                    "process": ["/reg/g/pcds/pyps/config/cxi/iocmanager/startProc"],
+                    "new_pid": ["27511"],
+                },
+                source_lines=9,
             ),
             id="procserv_status_update",
         ),
