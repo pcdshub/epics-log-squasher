@@ -17,7 +17,62 @@ import enum
 import functools
 import re
 from dataclasses import dataclass, field
-from typing import Callable, ClassVar, Dict, List, Optional, Tuple, Union
+from typing import (Callable, ClassVar, Dict, List, Optional, Sequence, Tuple,
+                    Union, cast)
+
+
+@dataclass(frozen=True)
+class Message:
+    message: str
+    timestamp: datetime.datetime = field(default_factory=datetime.datetime.now)
+    info: Tuple[Tuple[str, Union[str, Tuple[str, ...]]], ...] = field(default_factory=tuple)
+    index: int = 0
+    source_lines: int = 1
+
+    @classmethod
+    def from_dict(
+        cls,
+        message: str,
+        info: Dict[str, Union[str, Sequence[str]]],
+        timestamp: Optional[datetime.datetime] = None,
+        index: int = 0,
+        source_lines: int = 0,
+    ) -> Message:
+        if timestamp is None:
+            timestamp = datetime.datetime.now()
+
+        def value_to_tuple(value: Union[str, Sequence[str]]) -> Tuple[str, ...]:
+            if isinstance(value, str):
+                return (value, )
+            return tuple(value)
+
+        info_tuple = tuple(
+            (key, value_to_tuple(value))
+            for key, value in info.items()
+        )
+        return cls(
+            message=message,
+            timestamp=timestamp,
+            info=info_tuple,
+            index=index,
+            source_lines=source_lines,
+        )
+
+    def asdict(self) -> Dict[str, Union[str, Tuple[str, ...]]]:
+        res: Dict[str, Union[str, Tuple[str, ...]]] = {
+            "ts": str(self.timestamp),
+            "msg": self.message,
+        }
+        res.update(**dict((k, v) for k, v in self.info if v))
+        return res
+
+    @classmethod
+    def from_indexed_string(cls, value: IndexedString) -> Message:
+        return cls(message=value.value, timestamp=value.timestamp, index=value.index, info=(), source_lines=1)
+
+    @classmethod
+    def from_indexed_strings(cls, values: Sequence[IndexedString]) -> List[Message]:
+        return [cls.from_indexed_string(value) for value in values]
 
 
 class Regexes:
@@ -74,26 +129,33 @@ class GreenlitRegexes(Regexes):
 class GroupJoiner:
     pattern: re.Pattern
     message_format: str
-    extras: List[str]
+    extras: Optional[List[str]] = None
     extras_join: str = ", "
     count_threshold: int = 10
 
-    def join(self, matches: List[GroupMatch]) -> str:
+    def join(self, matches: List[GroupMatch]) -> Optional[Message]:
         if not matches:
-            return ""
+            return None
 
-        extras = [
-            match.groupdict[extra]
-            for match in matches
-            for extra in self.extras
-        ]
-        if self.count_threshold >= 0 and len(extras) > self.count_threshold:
-            extras = extras[:self.count_threshold]
-            extras.append("...")
+        extras: Dict[str, List[str]] = {}
+        for match in matches:
+            _append_groupdict(extras, match.groupdict)
 
-        message = matches[0].message
-        extras_joined = self.extras_join.join(extras)
-        return f"{message}: {extras_joined}"
+        if self.extras is not None:
+            # If 'extras' are specified, only include them
+            extras = {
+                key: value for key, value in extras.items()
+                if key in self.extras
+            }
+
+        first_match = matches[0]
+        return Message(
+            timestamp=first_match.source.timestamp,
+            index=first_match.source.index,
+            message=first_match.message,
+            info=tuple((key, tuple(value)) for key, value in extras.items()),
+            source_lines=len(matches),
+        )
 
 
 @dataclass(frozen=True)
@@ -111,7 +173,6 @@ class SingleLineGroupableRegexes:
         stream_protocol_aborted=GroupJoiner(
             pattern=re.compile(r'(?P<pv>.*): Protocol aborted'),
             message_format="Protocol aborted",
-            extras=["pv"],
         ),
         asyn_connect_failed=GroupJoiner(
             pattern=re.compile(r'(?P<pv>.*): pasynCommon->connect\(\) failed: (?P<reason>.*)'),
@@ -192,11 +253,14 @@ class MultilineGroupMatch:
     source: List[IndexedString] = field(default_factory=list)
     groupdict: Dict[str, List[str]] = field(default_factory=dict)
 
-    def join(self) -> Dict[str, Union[str, List[str]]]:
+    def join(self) -> Message:
         group = MultiLineGroupableRegexes.groups[self.name]
-        return dict(
-            msg=group.message_format.format(**self.groupdict),
-            **self.groupdict,
+        first = self.source[0]
+        return Message.from_dict(
+            message=group.message_format.format(**self.groupdict),
+            timestamp=first.timestamp,
+            info=cast(Dict[str, Sequence[str]], self.groupdict),
+            source_lines=len(self.source),
         )
 
 
@@ -211,19 +275,21 @@ class MultiLineGroupableRegexes:
     groups: ClassVar[Dict[str, MultilineGroupJoiner]] = dict(
         procserv_status_update=MultilineGroupJoiner(
             message_format="procServ status update",
-            start_pattern=re.compile(r'@@@ @@@ @@@ @@@ @@@'), 
+            start_pattern=re.compile(r'@@@ @@@ @@@ @@@ @@@'),
             inner_patterns=[
-                re.compile(r'@@@ Received a sigChild for process (?P<pid>\d+). Normal exit status = (?P<exit_code>\d+)'), 
-                re.compile(r'@@@ Current time: (?P<timestamp>.*)'), 
-                re.compile(r'@@@ Child process is shutting down, a new one will be restarted shortly'), 
-                re.compile(r'@@@ \^R or \^X restarts the child, \^Q quits the server'), 
+                re.compile(r'@@@ Received a sigChild for process (?P<pid>\d+). Normal exit status = (?P<exit_code>\d+)'),
+                re.compile(r'@@@ Current time: (?P<timestamp>.*)'),
+                re.compile(r'@@@ Child process is shutting down, a new one will be restarted shortly'),
+                re.compile(r'@@@ \^R or \^X restarts the child, \^Q quits the server'),
             ],
-            end_pattern=re.compile(r'@@@ @@@ @@@ @@@ @@@'), 
+            end_pattern=re.compile(r'@@@ @@@ @@@ @@@ @@@'),
         ),
     )
 
     @classmethod
-    def group_fullmatch(cls, state: Optional[MultilineGroupMatch], idx: IndexedString) -> Optional[MultilineGroupMatch]:
+    def group_fullmatch(
+        cls, state: Optional[MultilineGroupMatch], idx: IndexedString
+    ) -> Optional[MultilineGroupMatch]:
         if state is not None:
             joiner = cls.groups[state.name]
             for pattern in joiner.inner_patterns:
@@ -235,6 +301,7 @@ class MultiLineGroupableRegexes:
 
             match = joiner.end_pattern.fullmatch(idx.value)
             if match is not None:
+                state.source.append(idx)
                 _append_groupdict(state.groupdict, match.groupdict())
                 state.state = MultilineMatchState.end
                 return None
@@ -242,7 +309,7 @@ class MultiLineGroupableRegexes:
             # We're out of the group and we didn't see a recognized line
             state.state = MultilineMatchState.unmatched
             return None
-                
+
         for group, joiner in cls.groups.items():
             match = joiner.start_pattern.fullmatch(idx.value)
             if match is None:
@@ -369,9 +436,9 @@ def _split_indexes_and_groups(
 
 @dataclass
 class Squasher:
-    # by_timestamp: Dict[int, List[Union[IndexedString, GroupMatch]]] = field(default_factory=dict)
     by_message: Dict[str, List[Union[IndexedString, GroupMatch]]] = field(default_factory=dict)
     messages: List[IndexedString] = field(default_factory=list)
+    multiline_matches: List[MultilineGroupMatch] = field(default_factory=list)
     multiline_match: Optional[MultilineGroupMatch] = None
     num_bytes: int = 0
     messages_per_sec_threshold: float = 1.0
@@ -400,15 +467,16 @@ class Squasher:
                 )
             return
 
-        first = match.source[0]
-        self._add_indexed_string(
-            IndexedString(
-                index=first.index,
-                timestamp=first.timestamp,
-                value=str(match.join()),  # TODO
-            ),
-            allow_multiline=False
-        )
+        self.multiline_matches.append(match)
+        # first = match.source[0]
+        # self._add_indexed_string(
+        #     IndexedString(
+        #         index=first.index,
+        #         timestamp=first.timestamp,
+        #         value=str(match.join()),  # TODO
+        #     ),
+        #     allow_multiline=False
+        # )
 
     def add_indexed_string(self, value: IndexedString):
         self.messages.append(value)
@@ -418,10 +486,6 @@ class Squasher:
         self._add_indexed_string(value)
 
     def _add_indexed_string(self, value: IndexedString, *, allow_multiline: bool = True):
-        # Bin posix timestamps by the second:
-        ts = int(value.timestamp.timestamp())
-        # self.by_timestamp.setdefault(ts, []).append(value)
-
         if allow_multiline:
             last_match = self.multiline_match
             self.multiline_match = MultiLineGroupableRegexes.group_fullmatch(last_match, value)
@@ -455,64 +519,49 @@ class Squasher:
             indexed = self._create_indexed_string(line.rstrip(), local_timestamp=local_timestamp)
             self.add_indexed_string(indexed)
 
-    # def get_timespan(self) -> float:
-    #     if len(self.by_timestamp) == 0:
-    #         return 0.0
-    #     return (max(self.by_timestamp) - min(self.by_timestamp)) + 1
+    def squash(self) -> List[Message]:
+        squashed: List[Message] = []
 
-    def squash(self) -> Squashed:
-        squashed = []
+        if self.multiline_match is not None:
+            # Inside a multiline match: what to do?
+            # TODO Continue next time, right?
+            self.add_multiline_match(self.multiline_match)
+
+        for match in self.multiline_matches:
+            squashed.append(match.join())
+
         for line, messages in self.by_message.items():
             indexes, groups = _split_indexes_and_groups(messages)
 
             if indexes:
                 if GreenlitRegexes.fullmatch(line):
                     # Greenlit lines go in entirely
-                    squashed.extend(indexes)
+                    # squashed.extend(indexes)
+                    squashed.extend(Message.from_indexed_strings(indexes))
                     continue
 
                 first = indexes[0]
-                # last = indexes[-1]
                 if len(indexes) == 1:
-                    squashed.append(first)
+                    squashed.append(Message.from_indexed_string(first))
                 else:
                     count = len(indexes)
                     squashed.append(
-                        IndexedString(
-                            value=f"[{count}x] {line}",
+                        Message(
+                            message=f"[{count}x] {line}",
                             timestamp=first.timestamp,
                             index=first.index,
+                            source_lines=count,
                         )
                     )
 
             if groups:
                 first = groups[0]
                 joiner = SingleLineGroupableRegexes.groups[first.name]
-                squashed.append(
-                    IndexedString(
-                        value=joiner.join(groups),
-                        timestamp=first.source.timestamp,
-                        index=first.source.index,
-                    )
-                )
+                message = joiner.join(groups)
+                if message is not None:
+                    squashed.append(message)
 
-        def by_index(value: IndexedString) -> int:
+        def by_index(value: Message) -> int:
             return value.index
 
-        if self.multiline_match is not None:
-            # Inside a multiline match: what to do?
-            # Continue next time, right?
-            # TODO
-            self.add_multiline_match(self.multiline_match)
-
-        lines = [item.value for item in sorted(squashed, key=by_index)]
-        return Squashed(
-            lines=lines,
-            source_lines=len(self.messages),
-        )
-
-
-@dataclass
-class Squashed:
-    lines: List[str]
-    source_lines: int
+        return [item for item in sorted(squashed, key=by_index)]

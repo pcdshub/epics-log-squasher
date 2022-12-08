@@ -1,12 +1,13 @@
+from __future__ import annotations
+
 import datetime
 import textwrap
-from typing import Dict
+from typing import Dict, List
 
 import pytest
 
 from .. import parser
-
-# tail -n 10000 /cds/data/iocData/*/iocInfo/ioc.log > ~/last_log.txt
+from ..parser import Message
 
 test_cases = [
     pytest.param(
@@ -23,13 +24,13 @@ test_cases = [
         2022/11/09 09:32:01.914 HPL:GIGE:BASLER10:CONNECTION devAsynInt32 process error
         2022/11/09 09:32:01.994 HPL:GIGE:BASLER10:CONNECTION devAsynInt32 process error
         """,
-        parser.Squashed(
-            lines=[
-                # "2022/11/09 09:32:xx.xxx HPL:GIGE:BASLER10:CONNECTION devAsynInt32 process error",
-                "[11x] HPL:GIGE:BASLER10:CONNECTION devAsynInt32 process error",
-            ],
-            source_lines=11,
-        ),
+        # "2022/11/09 09:32:xx.xxx HPL:GIGE:BASLER10:CONNECTION devAsynInt32 process error",
+        [
+            Message(
+                message="[11x] HPL:GIGE:BASLER10:CONNECTION devAsynInt32 process error",
+                source_lines=11,
+            ),
+        ],
         id="repetitive_with_timestamp_asyn",
     ),
     pytest.param(
@@ -38,13 +39,12 @@ test_cases = [
         2021/12/07 00:01:02.876 prosilica:frameCallback: ERROR, frame has error code 16
         2021/12/07 00:01:03.875 prosilica:frameCallback: ERROR, frame has error code 16
         """,
-        parser.Squashed(
-            lines=[
-                # "2022/11/09 09:32:xx.xxx HPL:GIGE:BASLER10:CONNECTION devAsynInt32 process error",
+        [
+            Message(
                 "[3x] prosilica:frameCallback: ERROR, frame has error code 16",
-            ],
-            source_lines=3,
-        ),
+                source_lines=3,
+            ),
+        ],
         id="repetitive_with_timestamp_prosilica",
     ),
     pytest.param(
@@ -56,13 +56,16 @@ test_cases = [
         \x1b[31;1m2022/11/03 17:35:10.587 CXI:SC1:CVV:04 CXI:SC1:CVV:04:SetGain: No reply from device within 800 ms
         \x1b[31;1m2022/11/03 17:35:10.587 CXI:SC1:CVV:05 CXI:SC1:CVV:05:SetGain: No reply from device within 800 ms
         """,
-        parser.Squashed(
-            lines=[
+        [
+            Message(
                 "[3x] CXI:SC1:CVV:04 CXI:SC1:CVV:04:SetGain: No reply from device within 800 ms",
+                source_lines=3,
+            ),
+            Message(
                 "[3x] CXI:SC1:CVV:05 CXI:SC1:CVV:05:SetGain: No reply from device within 800 ms",
-            ],
-            source_lines=6,
-        ),
+                source_lines=3,
+            ),
+        ],
         id="repetitive_with_timestamp_ansi",
     ),
     pytest.param(
@@ -71,12 +74,13 @@ test_cases = [
         def: Protocol aborted
         ghi: Protocol aborted
         """,
-        parser.Squashed(
-            lines=[
-                "Protocol aborted: abc, def, ghi",
-            ],
-            source_lines=3,
-        ),
+        [
+            Message.from_dict(
+                message="Protocol aborted",
+                info={"pv": ["abc", "def", "ghi"]},
+                source_lines=3,
+            ),
+        ],
         id="protocol_abort_group",
     ),
     pytest.param(
@@ -93,12 +97,14 @@ test_cases = [
         9: Protocol aborted
         10: Protocol aborted
         """,
-        parser.Squashed(
-            lines=[
-                "Protocol aborted: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, ..."
-            ],
-            source_lines=11,
-        ),
+        [
+            Message.from_dict(
+                message="Protocol aborted",
+                info={"pv": ("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10")},
+                source_lines=11,
+            ),
+        ],
+        # TODO: no longer truncated; should we truncate extra info?
         id="protocol_abort_truncated_group",
     ),
     pytest.param(
@@ -108,13 +114,18 @@ test_cases = [
         def: pasynCommon->connect() failed: some reason 1
         345: pasynCommon->connect() failed: some reason 2
         """,
-        parser.Squashed(
-            lines=[
-                "pasynCommon->connect() failed: some reason 1: abc, def",
-                "pasynCommon->connect() failed: some reason 2: 012, 345",
-            ],
-            source_lines=4,
-        ),
+        [
+            Message.from_dict(
+                "pasynCommon->connect() failed: some reason 1",
+                info={"pv": ["abc", "def"]},
+                source_lines=2,
+            ),
+            Message.from_dict(
+                "pasynCommon->connect() failed: some reason 2",
+                info={"pv": ["012", "345"]},
+                source_lines=2,
+            ),
+        ],
         id="asyn_connect_failed",
     ),
     pytest.param(
@@ -123,12 +134,13 @@ test_cases = [
         2022/11/30 14:49:19.326233 scan-1 CXI:MCS2:01:m3:SCAN_POS lockRequest: pasynManager->queueRequest() failed: port TCP0 not connected
         2022/11/30 14:49:19.326261 scan-1 CXI:MCS2:01:m3:STATE_RBV lockRequest: pasynManager->queueRequest() failed: port TCP0 not connected
         """,
-        parser.Squashed(
-            lines=[
-                "scan-1 lockRequest: pasynManager->queueRequest() failed: port TCP0 not connected: CXI:MCS2:01:m2:STATE_RBV, CXI:MCS2:01:m3:SCAN_POS, CXI:MCS2:01:m3:STATE_RBV",
-            ],
-            source_lines=3,
-        ),
+        [
+            Message.from_dict(
+                "scan-1 lockRequest: pasynManager->queueRequest() failed: port TCP0 not connected",
+                info={"pv": ["CXI:MCS2:01:m2:STATE_RBV", "CXI:MCS2:01:m3:SCAN_POS", "CXI:MCS2:01:m3:STATE_RBV"]},
+                source_lines=3,
+            ),
+        ],
         id="asyn_connect_failed",
     ),
     pytest.param(
@@ -140,13 +152,14 @@ test_cases = [
         errlog: 511 messages were discarded
         errlog: 40 messages were discarded
         """,
-        parser.Squashed(
-            lines=[
-                "errlog: messages were discarded: 676, 189, 511, 511, 40",
-                "abc",
-            ],
-            source_lines=6,
-        ),
+        [
+            Message.from_dict(
+                "errlog: messages were discarded",
+                info={"count": ["676", "189", "511", "511", "40"]},
+                source_lines=5,
+            ),
+            Message("abc"),
+        ],
         id="errlog_spam",
     ),
     pytest.param(
@@ -158,17 +171,14 @@ test_cases = [
         @@@ Greenlit
         @@@ Greenlit
         """,
-        parser.Squashed(
-            lines=[
-                "@@@ This",
-                "@@@ This",
-                "@@@ Should be",
-                "@@@ Should be",
-                "@@@ Greenlit",
-                "@@@ Greenlit",
-            ],
-            source_lines=6,
-        ),
+        [
+            Message("@@@ This"),
+            Message("@@@ This"),
+            Message("@@@ Should be"),
+            Message("@@@ Should be"),
+            Message("@@@ Greenlit"),
+            Message("@@@ Greenlit"),
+        ],
         id="greenlit_ioc",
     ),
     pytest.param(
@@ -180,26 +190,39 @@ test_cases = [
         2022-12-02T13:48:11-0800 Info: connection closed by remote
         2022/12/02 13:48:12.530 cyclicThread: forcing disconnect.
         """,
-        parser.Squashed(
-            lines=[
-                # "2022/11/09 09:32:xx.xxx HPL:GIGE:BASLER10:CONNECTION devAsynInt32 process error",
+        [
+            Message(
                 "[2x] Info: Connected to 172.21.68.250",
+                source_lines=2,
+            ),
+            Message(
                 "[2x] Info: connection closed by remote",
+                source_lines=2,
+            ),
+            Message(
                 "[2x] cyclicThread: forcing disconnect.",
-            ],
-            source_lines=6,
-        ),
+                source_lines=2,
+            ),
+        ],
         id="repetitive_with_weird_timestamps",
     ),
 ]
 
 
+def compare_results(results: List[Message], all_expected: List[Message]):
+    for idx, (generated, expected) in enumerate(zip(results, all_expected)):
+        assert generated.message == expected.message, f"Message from index {idx}"
+        assert generated.info == expected.info, f"Info metadata from index {idx}"
+        assert generated.source_lines == expected.source_lines, f"Source line count from index {idx}"
+
+
 @pytest.mark.parametrize("lines, expected", test_cases)
-def test_squash(lines: str, expected: parser.Squashed):
+def test_squash(lines: str, expected: List[Message]):
     squasher = parser.Squasher()
     squasher.add_lines(textwrap.dedent(lines.rstrip()))
+
     squashed = squasher.squash()
-    assert squashed == expected
+    compare_results(squashed, expected)
 
 
 @pytest.mark.parametrize(
@@ -283,7 +306,7 @@ def test_groupable_regexes(
 
 
 @pytest.mark.parametrize(
-    "source_message, group, expected_message, groupdict",
+    "source_message, expected_message",
     [
         pytest.param(
             """\
@@ -294,29 +317,24 @@ def test_groupable_regexes(
             @@@ ^R or ^X restarts the child, ^Q quits the server
             @@@ @@@ @@@ @@@ @@@
             """,
-            "procserv_status_update",
-            "procServ status update",
-            {
-                "pid": "16392",
-                "exit_code": "127",
-                "timestamp": "Fri Dec  2 16:41:19 2022",
-            },
+            Message.from_dict(
+                message="procServ status update",
+                info={
+                    "pid": ["16392"],
+                    "exit_code": ["127"],
+                    "timestamp": ["Fri Dec  2 16:41:19 2022"],
+                },
+                source_lines=6,
+            ),
             id="procserv_status_update",
         ),
     ],
 )
 def test_multiline_groupable_regexes(
     source_message: str,
-    group: str,
-    expected_message: str,
-    groupdict: Dict[str, str],
+    expected_message: Message,
 ):
     squasher = parser.Squasher()
     squasher.add_lines(textwrap.dedent(source_message.rstrip()))
     squashed = squasher.squash()
-    assert squasher.multiline_match is None
-    assert len(squashed.lines) == 1
-    # assert match is not None
-    # assert match.message == expected_message
-    # assert match.name == group
-    # assert match.groupdict == groupdict
+    compare_results(squashed, [expected_message])

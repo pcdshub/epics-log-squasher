@@ -4,6 +4,7 @@ import collections
 import datetime
 import glob
 import io
+import json
 import logging
 import os
 import re
@@ -13,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Deque, Dict, List, Optional, Tuple
 
-from .parser import Squashed, Squasher
+from .parser import Message, Squasher
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ class File:
         self.monitor.position = self.fp.tell()
         self.last_update = time.monotonic()
 
-    def squash(self) -> Squashed:
+    def squash(self) -> List[Message]:
         self.squasher = Squasher()
         while self.lines:
             # Atomic popping of lines to avoid locking
@@ -337,9 +338,9 @@ class GlobalMonitor:
 
             num_bytes_in += file.squasher.num_bytes
             num_lines_in += len(file.squasher.messages)
-            num_lines_out += len(squashed.lines)
-            for line in squashed.lines:
-                output = f"{file.short_name} {line}"
+            num_lines_out += len(squashed)
+            for line in squashed:
+                output = json.dumps(line.asdict())
                 print(output, file=out_file)
                 num_out_bytes += len(output) + 1  # include the newline
 

@@ -1,8 +1,10 @@
 import datetime
 import io
+import json
 import tempfile
 
 from .. import monitor
+from ..parser import Message
 
 
 class MockLogFile:
@@ -67,10 +69,11 @@ def test_global_monitor():
             mon.squash(out_file=fp)
             results = fp.getvalue()
 
-        expected = f"short_name [{count}x] hello\n"
-        assert results == expected
+        expected = f"[{count}x] hello"
+        assert expected in results
 
+        full_message_length = len(json.dumps(Message(message=expected).asdict())) + 1
         assert mon.stats.bytes_in == mock_log_file.bytes_written
-        assert mon.stats.bytes_out == len(expected)
+        assert mon.stats.bytes_out == full_message_length
         assert mon.stats.lines_in == count
         assert mon.stats.lines_out == 1
