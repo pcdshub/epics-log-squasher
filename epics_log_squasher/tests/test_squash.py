@@ -409,3 +409,56 @@ def test_multiline_groupable_regexes(
     squasher.add_lines(textwrap.dedent(source_message.rstrip()))
     squashed = squasher.squash()
     compare_results(squashed, [expected_message])
+
+
+@pytest.mark.parametrize(
+    "source_message, expected_lines",
+    [
+        pytest.param(
+            """\
+            @@@ @@@ @@@ @@@ @@@
+            @@@ Received a sigChild for process 27111. Normal exit status = 127
+            @@@ Current time: Thu Dec  8 15:29:34 2022
+            @@@ Child process is shutting down, a new one will be restarted shortly
+            """,
+            0,
+            id="procserv_status_update",
+        ),
+    ],
+)
+def test_multiline_groupable_regexes_pending(
+    source_message: str,
+    expected_lines: int,
+):
+    squasher = parser.Squasher()
+    squasher.add_lines(textwrap.dedent(source_message.rstrip()))
+    squashed = squasher.squash()
+    assert len(squashed) == expected_lines
+    # Total line count should be correct
+    assert (len(squashed) + len(squasher.pending_lines)) == len(squasher.messages)
+
+
+@pytest.mark.parametrize(
+    "source_message, expected_lines",
+    [
+        pytest.param(
+            """\
+            @@@ @@@ @@@ @@@ @@@
+            @@@ Received a sigChild for process 27111. Normal exit status = 127
+            @@@ Current time: Thu Dec  8 15:29:34 2022
+            @@@ Child process is shutting down, a new one will be restarted shortly
+            interruption to group match is here
+            """,
+            4 + 1,  # procserv lines and interruption
+            id="procserv_status_update",
+        ),
+    ],
+)
+def test_multiline_groupable_regexes_interrupted(
+    source_message: str,
+    expected_lines: int,
+):
+    squasher = parser.Squasher()
+    squasher.add_lines(textwrap.dedent(source_message.rstrip()))
+    squashed = squasher.squash()
+    assert len(squashed) == expected_lines
