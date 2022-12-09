@@ -2,6 +2,8 @@ import datetime
 import io
 import json
 import tempfile
+import threading
+import time
 import unittest.mock
 from typing import Generator, Union
 
@@ -206,3 +208,55 @@ def test_global_monitor_file_open_error(monitor_test: MonitorTest, mock_log_file
     assert monitor_test.file.num_lines_in == 0
     assert len(monitor_test.global_monitor.monitored_files) == 0
     assert open_permission_error.called
+
+
+def test_run_stop_smoke(monitor_test: MonitorTest, monkeypatch):
+    squash_event = threading.Event()
+    exited_event = threading.Event()
+
+    def mock_squash(*args, **kwargs):
+        squash_event.set()
+
+    def run_thread():
+        monitor_test.global_monitor.run(
+            squash_period=0.01,
+            file_check_period=0.1,
+            show_statistics_after=1,
+        )
+        exited_event.set()
+
+    monkeypatch.setattr(monitor_test.global_monitor, "squash", mock_squash)
+    threading.Thread(target=run_thread, daemon=True).start()
+
+    # Ensure we've called squash at least once
+    assert squash_event.wait(timeout=1.0)
+
+    # Stop it and make sure that it exits
+    monitor_test.global_monitor.stop()
+    assert exited_event.wait(timeout=1.0)
+
+
+def test_periodic_event():
+    event = monitor.PeriodicEvent(period=0.075, ready_at_start=False)
+    assert not event.check()
+    time.sleep(0.1)
+    assert event.check()
+
+
+def test_periodic_event_ready_at_start():
+    event = monitor.PeriodicEvent(period=0.075, ready_at_start=True)
+    assert event.is_ready
+
+
+def test_stats_smoke():
+    stats = monitor.GlobalMonitorStatistics()
+    assert stats.bytes_percent == 1.0
+    assert stats.lines_percent == 1.0
+    assert stats.elapsed_time > 0.0
+    stats.elapsed_time_timedelta
+    str(stats)
+
+    stats.bytes_in = 1
+    stats.lines_in = 1
+    assert stats.bytes_percent == 0.0
+    assert stats.lines_percent == 0.0
