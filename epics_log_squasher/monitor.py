@@ -360,7 +360,7 @@ class GlobalMonitor:
     def run(
         self,
         file_check_period: float = 1.0,
-        squash_period: float = 1.0,
+        squash_period: float = 30.0,
         show_statistics_after: int = 2,
     ):
         file_check = PeriodicEvent(file_check_period, ready_at_start=True)
