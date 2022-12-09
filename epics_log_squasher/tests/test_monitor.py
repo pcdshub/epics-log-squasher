@@ -2,7 +2,10 @@ import datetime
 import io
 import json
 import tempfile
-from typing import Union
+import unittest.mock
+from typing import Generator, Union
+
+import pytest
 
 from .. import monitor
 from ..parser import Message
@@ -36,20 +39,20 @@ class MockLogFile:
 
 
 class MonitorTest:
-    mon: monitor.GlobalMonitor
+    global_monitor: monitor.GlobalMonitor
     mock_log_file: MockLogFile
     file: monitor.File
 
     def __init__(self):
         self.mock_log_file = MockLogFile()
 
-        self.mon = monitor.GlobalMonitor(
+        self.global_monitor = monitor.GlobalMonitor(
             file_glob=self.mock_log_file.filename,
             start_thread=False,
         )
-        self.mon.update()
+        self.global_monitor.update()
 
-        file, = list(self.mon.files.values())
+        file, = list(self.global_monitor.files.values())
         file.short_name = "short_name"
         assert file.filename == self.mock_log_file.filename
         self.file = file
@@ -57,44 +60,55 @@ class MonitorTest:
     def clear_statistics(self):
         self.mock_log_file.lines_written = 0
         self.mock_log_file.bytes_written = 0
-        for file_ in self.mon.files.values():
+        for file_ in self.global_monitor.files.values():
             file_.num_lines_in = 0
-        self.mon.stats.clear()
+        self.global_monitor.stats.clear()
 
     def update(self):
-        self.mon.update()
-        self.mon.reader._poll()
+        self.global_monitor.update()
+        self.global_monitor.reader._poll()
 
     def squash(self):
         with io.StringIO() as fp:
-            self.mon.squash(out_file=fp)
+            self.global_monitor.squash(out_file=fp)
             return fp.getvalue()
 
     def close(self):
-        for file in self.mon.files.values():
+        for file in self.global_monitor.files.values():
             file.close()
 
 
-def test_global_monitor():
+@pytest.fixture(scope="function")
+def monitor_test() -> Generator[MonitorTest, None, None]:
     test = MonitorTest()
+    try:
+        yield test
+    finally:
+        test.close()
 
-    mon = test.mon
-    file = test.file
-    mock_log_file = test.mock_log_file
+
+@pytest.fixture(scope="function")
+def mock_log_file(monitor_test: MonitorTest) -> MockLogFile:
+    return monitor_test.mock_log_file
+
+
+def test_global_monitor(monitor_test: MonitorTest, mock_log_file: MockLogFile):
+    mon = monitor_test.global_monitor
+    file = monitor_test.file
 
     for count in [2, 5, 10]:
         # Reset our statistics
-        test.clear_statistics()
+        monitor_test.clear_statistics()
 
         for _ in range(count):
             mock_log_file.write_line("hello")
 
-        test.update()
+        monitor_test.update()
 
         assert file.num_lines_in == count
         assert len(mon.monitored_files) == 1
 
-        results = test.squash()
+        results = monitor_test.squash()
 
         expected = f"[{count}x] hello"
         assert expected in results
@@ -107,29 +121,24 @@ def test_global_monitor():
         assert mon.stats.lines_in == count
         assert mon.stats.lines_out == 1
 
-    test.close()
 
-
-def test_global_monitor_file_overwrite():
-    test = MonitorTest()
-
-    mon = test.mon
-    file = test.file
-    mock_log_file = test.mock_log_file
-
-    # Reset our statistics
-    test.clear_statistics()
+def test_global_monitor_file_overwrite(
+    monitor_test: MonitorTest,
+    mock_log_file: MockLogFile,
+):
+    mon = monitor_test.global_monitor
+    file = monitor_test.file
 
     count = 2
     for _ in range(count):
         mock_log_file.write_line("hello")
 
-    test.update()
+    monitor_test.update()
 
     assert file.num_lines_in == count
     assert len(mon.monitored_files) == 1
 
-    results = test.squash()
+    results = monitor_test.squash()
 
     expected = f"[{count}x] hello"
     assert expected in results
@@ -145,55 +154,55 @@ def test_global_monitor_file_overwrite():
     for _ in range(count):
         mock_log_file.write_line("new file")
 
-    test.clear_statistics()
-    test.update()
+    monitor_test.clear_statistics()
+    monitor_test.update()
 
     assert file.num_lines_in == count
     assert len(mon.monitored_files) == 1
 
-    results = test.squash()
+    results = monitor_test.squash()
 
     expected = f"[{count}x] new file"
     assert expected in results
 
-    test.close()
 
-
-def test_global_monitor_file_ioerror(monkeypatch):
-    test = MonitorTest()
-
-    mon = test.mon
-    file = test.file
-    mock_log_file = test.mock_log_file
-
-    # Reset our statistics
-    test.clear_statistics()
-
+def test_global_monitor_file_ioerror(monitor_test: MonitorTest, mock_log_file: MockLogFile, monkeypatch):
     count = 2
     for _ in range(count):
         mock_log_file.write_line("hello")
 
-    test.update()
+    monitor_test.update()
 
-    assert file.num_lines_in == count
-    assert len(mon.monitored_files) == 1
+    assert monitor_test.file.num_lines_in == count
+    assert len(monitor_test.global_monitor.monitored_files) == 1
 
-    def read_raise():
-        raise IOError("nope")
+    read_raise = unittest.mock.Mock(side_effect=IOError("nope"))
 
-    results = test.squash()
+    results = monitor_test.squash()
 
     expected = f"[{count}x] hello"
     assert expected in results
 
-    monkeypatch.setattr(test.file, "read", read_raise)
+    monkeypatch.setattr(monitor_test.file, "read", read_raise)
 
-    test.clear_statistics()
-    test.update()
+    monitor_test.clear_statistics()
+    monitor_test.update()
 
-    assert file.num_lines_in == 0
-    assert len(mon.monitored_files) == 0
+    assert monitor_test.file.num_lines_in == 0
+    assert len(monitor_test.global_monitor.monitored_files) == 0
 
-    assert test.squash() == ""
+    assert monitor_test.squash() == ""
+    assert read_raise.called
 
-    test.close()
+
+def test_global_monitor_file_open_error(monitor_test: MonitorTest, mock_log_file: MockLogFile, monkeypatch):
+    open_permission_error = unittest.mock.Mock(side_effect=PermissionError("nope"))
+    monkeypatch.setattr(monitor_test.file, "open", open_permission_error)
+
+    monitor_test.update()
+    mock_log_file.write_line("hello")
+    monitor_test.update()
+
+    assert monitor_test.file.num_lines_in == 0
+    assert len(monitor_test.global_monitor.monitored_files) == 0
+    assert open_permission_error.called

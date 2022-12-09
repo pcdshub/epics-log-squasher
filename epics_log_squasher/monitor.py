@@ -523,7 +523,11 @@ class GlobalMonitor:
             file.monitor.check()
             if fn not in previously_monitored and file.monitor.data_available:
                 logger.info("Log file changed: %s", file.filename)
-                self.reader.add_file(file)
+                try:
+                    self.reader.add_file(file)
+                except Exception as ex:
+                    logger.warning("Failed to open file %r (%s: %s)", fn, type(ex).__name__, ex)
+                    logger.debug("Failed to open file %r", fn, exc_info=True)
 
         if len(previously_monitored) != len(self.monitored_files):
             logger.warning(
