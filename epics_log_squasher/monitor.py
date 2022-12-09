@@ -294,9 +294,17 @@ class FileReaderThread:
         to_remove = []
 
         for file in files:
-            file.read()
-            if file.elapsed_since_last_update > self.close_timeout:
+            try:
+                file.read()
+            except Exception:
+                logger.exception(
+                    "Failed to read file: %s. Removing from list.",
+                    file.filename
+                )
                 to_remove.append(file)
+            else:
+                if file.elapsed_since_last_update > self.close_timeout:
+                    to_remove.append(file)
 
         with self._lock:
             for file in to_remove:

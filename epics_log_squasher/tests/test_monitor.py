@@ -157,3 +157,43 @@ def test_global_monitor_file_overwrite():
     assert expected in results
 
     test.close()
+
+
+def test_global_monitor_file_ioerror(monkeypatch):
+    test = MonitorTest()
+
+    mon = test.mon
+    file = test.file
+    mock_log_file = test.mock_log_file
+
+    # Reset our statistics
+    test.clear_statistics()
+
+    count = 2
+    for _ in range(count):
+        mock_log_file.write_line("hello")
+
+    test.update()
+
+    assert file.num_lines_in == count
+    assert len(mon.monitored_files) == 1
+
+    def read_raise():
+        raise IOError("nope")
+
+    results = test.squash()
+
+    expected = f"[{count}x] hello"
+    assert expected in results
+
+    monkeypatch.setattr(test.file, "read", read_raise)
+
+    test.clear_statistics()
+    test.update()
+
+    assert file.num_lines_in == 0
+    assert len(mon.monitored_files) == 0
+
+    assert test.squash() == ""
+
+    test.close()
