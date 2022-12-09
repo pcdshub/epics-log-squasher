@@ -17,3 +17,4 @@ include versioneer.py
 #
 # Or multiple recursively:
 # recursive-include path file*glob1* file*glob*2
+include epics_log_squasher/_version.py

@@ -111,3 +111,7 @@ ENV/
 .DS_Store?
 Icon?
 Thumbs.db
+
+# @klauer's test files
+/.conda_env
+epics_log_squasher/tests/last_log.txt
