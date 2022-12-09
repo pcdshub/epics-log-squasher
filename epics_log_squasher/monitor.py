@@ -254,12 +254,10 @@ class GlobalMonitorStatistics:
     def __str__(self) -> str:
         return (
             f"Running for {self.elapsed_time_timedelta}: "
-            f"{self.bytes_in} bytes in "
-            f"-> {self.bytes_out} bytes out "
-            f"({self.bytes_percent:.2f} %). "
-            f"{self.lines_in} lines in "
-            f"-> {self.lines_out} lines out "
-            f"({self.lines_percent:.2f} %)"
+            f"{self.bytes_out} bytes out / {self.bytes_in} bytes in "
+            f"= {self.bytes_percent:.2f}% "
+            f"and {self.lines_out} lines out / {self.lines_in} lines in "
+            f"= {self.lines_percent:.2f}%"
         )
 
 
