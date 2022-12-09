@@ -253,6 +253,39 @@ class MultilineGroupMatch:
     source: List[IndexedString] = field(default_factory=list)
     groupdict: Dict[str, List[str]] = field(default_factory=dict)
 
+    def fullmatch(self, idx: IndexedString) -> bool:
+        """
+        Attempt to continue the multi-line group match.
+
+        Parameters
+        ----------
+        idx : IndexedString
+            A new line to add.
+
+        Returns
+        -------
+        bool
+            If the match was successful.
+        """
+        joiner = MultiLineGroupableRegexes.groups[self.name]
+        for pattern in joiner.inner_patterns:
+            match = pattern.fullmatch(idx.value)
+            if match is not None:
+                self.source.append(idx)
+                _append_groupdict(self.groupdict, match.groupdict())
+                return True
+
+        match = joiner.end_pattern.fullmatch(idx.value)
+        if match is not None:
+            self.source.append(idx)
+            _append_groupdict(self.groupdict, match.groupdict())
+            self.state = MultilineMatchState.end
+            return False
+
+        # We're out of the group and we didn't see a recognized line
+        self.state = MultilineMatchState.unmatched
+        return False
+
     def join(self) -> Message:
         group = MultiLineGroupableRegexes.groups[self.name]
         first = self.source[0]
@@ -265,6 +298,16 @@ class MultilineGroupMatch:
 
 
 def _append_groupdict(existing: Dict[str, List[str]], add: Dict[str, str]) -> None:
+    """
+    Append the regex-match-returned groupdict ``add`` to ``base``.
+
+    Parameters
+    ----------
+    base : Dict[str, List[str]]
+        The base dictionary to modify.
+    add : Dict[str, str]
+        The new dictionary to append.
+    """
     for key, value in add.items():
         existing.setdefault(key, []).append(value)
 
@@ -292,43 +335,31 @@ class MultiLineGroupableRegexes:
     )
 
     @classmethod
-    def group_fullmatch(
-        cls, state: Optional[MultilineGroupMatch], idx: IndexedString
-    ) -> Optional[MultilineGroupMatch]:
-        if state is not None:
-            joiner = cls.groups[state.name]
-            for pattern in joiner.inner_patterns:
-                match = pattern.fullmatch(idx.value)
-                if match is not None:
-                    state.source.append(idx)
-                    _append_groupdict(state.groupdict, match.groupdict())
-                    return state
+    def start_fullmatch(cls, idx: IndexedString) -> Optional[MultilineGroupMatch]:
+        """
+        Check the line to see if matches the start of a multi-line group.
 
-            match = joiner.end_pattern.fullmatch(idx.value)
-            if match is not None:
-                state.source.append(idx)
-                _append_groupdict(state.groupdict, match.groupdict())
-                state.state = MultilineMatchState.end
-                return None
+        Parameters
+        ----------
+        idx : IndexedString
+            The indexed log message line.
 
-            # We're out of the group and we didn't see a recognized line
-            state.state = MultilineMatchState.unmatched
-            return None
-
+        Returns
+        -------
+        MultilineGroupMatch or None
+        """
         for group, joiner in cls.groups.items():
             match = joiner.start_pattern.fullmatch(idx.value)
-            if match is None:
-                continue
-
-            return MultilineGroupMatch(
-                name=group,
-                source=[idx],
-                state=MultilineMatchState.start,
-                groupdict={
-                    key: [value]
-                    for key, value in match.groupdict().items()
-                }
-            )
+            if match is not None:
+                return MultilineGroupMatch(
+                    name=group,
+                    source=[idx],
+                    state=MultilineMatchState.start,
+                    groupdict={
+                        key: [value]
+                        for key, value in match.groupdict().items()
+                    }
+                )
 
         return None
 
@@ -374,12 +405,48 @@ class DateFormats:
         ),
     )
 
+    @property
+    def formats(self) -> Dict[str, DateFormat]:
+        """The defined date formats."""
+        return self._date_formats_.copy()
+
     @classmethod
     def format(cls, dt: datetime.datetime, fmt: str = "standard") -> str:
+        """
+        Format a datetime instance according to one of the formats defined
+        here.
+
+        Parameters
+        ----------
+        dt : datetime.datetime
+            The timestamp to format.
+        fmt : str, optional
+            The format to use.  Defaults to "standard".
+
+        Returns
+        -------
+        str
+        """
         return cls._date_formats_[fmt].strftime(dt)
 
     @classmethod
     def find_timestamp(cls, line: str) -> Tuple[Optional[datetime.datetime], str]:
+        """
+        Find a timestamp in the line based on the defined date formats.
+
+        Parameters
+        ----------
+        line : str
+            The full log line.  Assumed to be pre-processed for whitespace
+            and such.
+
+        Returns
+        -------
+        datetime.datetime or None
+            The timestamp, if found.
+        str
+            The remainder of the message after the timestamp.
+        """
         for fmt in cls._date_formats_.values():
             try:
                 split = line.strip().split(fmt.split_char)
@@ -398,6 +465,22 @@ class DateFormats:
 
 @dataclass(frozen=True)
 class IndexedString:
+    """
+    A log message string with tags of order (index) and timestamp.
+
+    Parameters
+    ----------
+    index : int
+        A numerical index for the log message.  In the context of the log
+        squasher, this means the order that the message was seen.
+
+    timestamp : datetime.datetime
+        The timestamp of the log message. This could be derived from the
+        message or local time when the log message was seen.
+
+    value : str
+        The log message itself.
+    """
     index: int
     timestamp: datetime.datetime
     value: str
@@ -406,6 +489,24 @@ class IndexedString:
     def from_string(
         cls, index: int, value: str, local_timestamp: Optional[float] = None
     ) -> IndexedString:
+        """
+        Create an IndexedString from the provided log message string.
+
+        Parameters
+        ----------
+        index : int
+            A numerical index to use.
+        value : str
+            The log line.
+        local_timestamp : float or None, optional
+            The timestamp of the log message. If no timestamp is found
+            in the message, local_timestamp will be used or
+            `datetime.datetime.now` will be used as a final fallback.
+
+        Returns
+        -------
+        IndexedString
+        """
         timestamp, line = DateFormats.find_timestamp(value)
         if timestamp is None:
             if local_timestamp is not None:
@@ -431,6 +532,22 @@ class IndexedString:
 def _split_indexes_and_groups(
     messages: List[Union[IndexedString, GroupMatch]]
 ) -> Tuple[List[IndexedString], List[GroupMatch]]:
+    """
+    Split messages by their class.
+
+    Parameters
+    ----------
+    messages : list of either IndexedString or GroupMatch
+        The source messages.
+
+    Returns
+    -------
+    List[IndexedString]
+        Indexed strings.
+
+    List[GroupMatch]
+        Single line group matches.
+    """
     indexes = []
     groups = []
     for message in messages:
@@ -448,18 +565,63 @@ def _split_indexes_and_groups(
 
 @dataclass
 class Squasher:
+    """
+    The primary tool for squashing log messages: the Squasher.
+
+    Parameters
+    ----------
+    by_message : dict of str to list of IndexedString or GroupMatch
+        Dictionary of output log messages.  Keyed on final output message,
+        may relate to either simple strings (IndexedString) or single-line
+        regex matches (GroupMatch).
+
+    messages : list of IndexedString
+        All messages in order of addition.  Ungrouped and mostly raw - only
+        processed to extract timestamps.
+
+    multiline_matches : list of MultilineGroupMatch
+        All successful multiline match results.
+
+    multiline_match : MultilineGroupMatch or None
+        The current multiline group match.  This is set when the
+        "start_pattern" of a MultilineGroupJoiner is hit but we have yet to see
+        a message matching its "end_pattern">
+
+    num_bytes : int
+        The total number of raw bytes (_well_, decoded single characters)
+        passed into the squasher.
+    """
     by_message: Dict[str, List[Union[IndexedString, GroupMatch]]] = field(default_factory=dict)
     messages: List[IndexedString] = field(default_factory=list)
     multiline_matches: List[MultilineGroupMatch] = field(default_factory=list)
     multiline_match: Optional[MultilineGroupMatch] = None
     num_bytes: int = 0
-    messages_per_sec_threshold: float = 1.0
 
+    # Internal: tracking the message index.
     _index: int = 0
 
     def _create_indexed_string(
         self, value: str, local_timestamp: Optional[float] = None
     ) -> IndexedString:
+        """
+        Create an IndexedString from the provided string.
+
+        The string will be cleaned per CleanRegexes first, and timestamps
+        will be searched for and stripped via `IndexedString.from_string`.
+
+        Parameters
+        ----------
+        value : str
+            The line to be included in the string.
+        local_timestamp : float, optional
+            If a timestamp is not found, this POSIX `local_timestamp` will be
+            substituted. The default results in `datetime.datetime.now()`
+            being used at the time of string creation.
+
+        Returns
+        -------
+        IndexedString
+        """
         self._index = (self._index + 1) % 1_000_000
         return IndexedString.from_string(
             index=self._index,
@@ -467,51 +629,81 @@ class Squasher:
             local_timestamp=local_timestamp,
         )
 
-    def add_multiline_match(self, match: MultilineGroupMatch):
+    def add_multiline_match(self, match: MultilineGroupMatch) -> None:
+        """
+        Add a multiline match to the list.
+
+        Parameters
+        ----------
+        match : MultilineGroupMatch
+            The multiline match.
+        """
         if not match.source:
+            # Empty match. Skip.
             return
 
         if match.state != MultilineMatchState.end:
+            # If the match wasn't complete (end_pattern found), go back and
+            # just add the source lines one-by-one.
             for line in match.source:
-                self._add_indexed_string(
-                    line,
-                    allow_multiline=False
-                )
+                self._add_with_single_line_grouping(line)
             return
 
         self.multiline_matches.append(match)
-        # first = match.source[0]
-        # self._add_indexed_string(
-        #     IndexedString(
-        #         index=first.index,
-        #         timestamp=first.timestamp,
-        #         value=str(match.join()),  # TODO
-        #     ),
-        #     allow_multiline=False
-        # )
 
-    def add_indexed_string(self, value: IndexedString):
+    def add_indexed_string(self, value: IndexedString) -> bool:
+        """
+        Add an indexed string to the list of messages.
+
+        Filters out messages based on IgnoreRegexes.
+
+        Parameters
+        ----------
+        value : IndexedString
+            The string to add.
+
+        Returns
+        -------
+        bool
+            If the string was included (True) or filtered out (False).
+        """
         self.messages.append(value)
         if IgnoreRegexes.fullmatch(value.value):
-            return
+            return False
 
-        self._add_indexed_string(value)
+        last_match = self.multiline_match
+        if last_match is not None:
+            in_group = last_match.fullmatch(value)
+            if not in_group:
+                self.multiline_match = None
+        else:
+            self.multiline_match = MultiLineGroupableRegexes.start_fullmatch(value)
 
-    def _add_indexed_string(self, value: IndexedString, *, allow_multiline: bool = True):
-        if allow_multiline:
-            last_match = self.multiline_match
-            self.multiline_match = MultiLineGroupableRegexes.group_fullmatch(last_match, value)
-            if last_match is not None:
-                if self.multiline_match is not last_match:
-                    self.add_multiline_match(last_match)
-                if self.multiline_match is None and last_match.state == MultilineMatchState.end:
-                    # We finished a multiline group. Don't process the final line.
-                    return
+        if last_match is not None:
+            if self.multiline_match is not last_match:
+                self.add_multiline_match(last_match)
+            if self.multiline_match is None and last_match.state == MultilineMatchState.end:
+                # We finished a multiline group. Don't process the final line.
+                return True
 
-            if self.multiline_match is not None:
-                # We're in a multiline group; don't process it further
-                return
+        if self.multiline_match is not None:
+            # We're in a multiline group; don't process it further
+            return True
 
+        self._add_with_single_line_grouping(value)
+        return True
+
+    def _add_with_single_line_grouping(self, value: IndexedString) -> None:
+        """
+        Add an indexed string to the list of messages.
+
+        Group with SingleLineGroupableRegexes, if possible.
+
+        Parameters
+        ----------
+        value : IndexedString
+            The string to add.
+        """
         match = SingleLineGroupableRegexes.group_fullmatch(value)
 
         if match is not None:
@@ -521,6 +713,20 @@ class Squasher:
             self.by_message.setdefault(value.value, []).append(match or value)
 
     def add_lines(self, value: str, local_timestamp: Optional[float] = None):
+        """
+        Add a line (or lines) to the squasher.
+
+        Lines will be split with `str.splitlines`.
+
+        Parameters
+        ----------
+        value : str
+            The log line or lines to add.
+        local_timestamp : float or None, optional
+            If a timestamp is not found, this POSIX `local_timestamp` will be
+            substituted. The default results in `datetime.datetime.now()`
+            being used at the time of string creation.
+        """
         if "\n" in value:
             self.num_bytes += len(value)
         else:
@@ -533,12 +739,39 @@ class Squasher:
 
     @property
     def pending_lines(self) -> List[IndexedString]:
+        """
+        Lines that were being processed at ``.squash()`` time.
+
+        This includes multiline matches where the start_pattern was matched
+        but not the end_pattern.
+
+        Returns
+        -------
+        list of IndexedString
+        """
         if self.multiline_match is None:
             return []
 
         return self.multiline_match.source
 
     def squash(self) -> List[Message]:
+        """
+        Squash the provided log lines into a list of Message.
+
+        This squashes:
+        1. Multiple simple messages with the same value
+        2. Single line groups with the same message
+        3. Previously-recorded multiline groups
+
+        See Also
+        --------
+        Multiline group matches may still be pending. See ``pending_lines``
+        for more information.
+
+        Returns
+        -------
+        List[Message]
+        """
         squashed: List[Message] = []
 
         for match in self.multiline_matches:
@@ -550,7 +783,6 @@ class Squasher:
             if indexes:
                 if GreenlitRegexes.fullmatch(line):
                     # Greenlit lines go in entirely
-                    # squashed.extend(indexes)
                     squashed.extend(Message.from_indexed_strings(indexes))
                     continue
 
@@ -578,4 +810,4 @@ class Squasher:
         def by_index(value: Message) -> int:
             return value.index
 
-        return [item for item in sorted(squashed, key=by_index)]
+        return list(sorted(squashed, key=by_index))
