@@ -9,7 +9,7 @@ import threading
 import time
 from typing import List
 
-from ..parser import Squasher
+from ..parser import DateFormats, Squasher
 
 DESCRIPTION = __doc__
 
@@ -41,6 +41,7 @@ def _read_thread(lines: List[str], lock: threading.RLock):
 
 def main(period: float = 10.0):
     lines = []
+    pending_lines = []
     lock = threading.RLock()
     read_thread = threading.Thread(target=_read_thread, daemon=True, args=(lines, lock))
     read_thread.start()
@@ -54,7 +55,7 @@ def main(period: float = 10.0):
                 continue
 
             with lock:
-                acquired = lines.copy()
+                acquired = pending_lines + lines.copy()
                 lines.clear()
 
             squash = Squasher()
@@ -66,6 +67,13 @@ def main(period: float = 10.0):
 
             for line in squashed:
                 print(line)
+
+            # TODO: this inefficiently goes back to strings for this simple
+            # implementation
+            pending_lines = [
+                " ".join((DateFormats.format(line.timestamp), line.value))
+                for line in squash.pending_lines
+            ]
             print(f"({bytes_raw} -> {bytes_filtered} bytes)", file=sys.stderr)
     except KeyboardInterrupt:
         ...

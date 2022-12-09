@@ -346,6 +346,11 @@ class GlobalMonitor:
                 print(output, file=out_file)
                 num_out_bytes += len(output) + 1  # include the newline
 
+            # If we were in the middle of parsing a group, there may be some
+            # lines for next time
+            for line in reversed(file.squasher.pending_lines):
+                file.lines.insert(0, (line.timestamp.timestamp(), line.value))
+
         self.stats.bytes_in += num_bytes_in
         self.stats.bytes_out += num_out_bytes
 
@@ -355,7 +360,7 @@ class GlobalMonitor:
     def run(
         self,
         file_check_period: float = 1.0,
-        squash_period: float = 30.0,
+        squash_period: float = 1.0,
         show_statistics_after: int = 2,
     ):
         file_check = PeriodicEvent(file_check_period, ready_at_start=True)

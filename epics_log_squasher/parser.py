@@ -344,6 +344,9 @@ class DateFormat:
     #: A cleaner that can be called on the result message
     cleaner: Optional[Callable[[str], str]] = None
 
+    def strftime(self, dt: datetime.datetime) -> str:
+        return dt.strftime(self.format)
+
 
 @dataclass
 class DateFormats:
@@ -370,6 +373,10 @@ class DateFormats:
             cleaner=functools.partial(re.compile(r"^\d+\s+").sub, ""),
         ),
     )
+
+    @classmethod
+    def format(cls, dt: datetime.datetime, fmt: str = "standard") -> str:
+        return cls._date_formats_[fmt].strftime(dt)
 
     @classmethod
     def find_timestamp(cls, line: str) -> Tuple[Optional[datetime.datetime], str]:
@@ -524,13 +531,15 @@ class Squasher:
             indexed = self._create_indexed_string(line.rstrip(), local_timestamp=local_timestamp)
             self.add_indexed_string(indexed)
 
+    @property
+    def pending_lines(self) -> List[IndexedString]:
+        if self.multiline_match is None:
+            return []
+
+        return self.multiline_match.source
+
     def squash(self) -> List[Message]:
         squashed: List[Message] = []
-
-        if self.multiline_match is not None:
-            # Inside a multiline match: what to do?
-            # TODO Continue next time, right?
-            self.add_multiline_match(self.multiline_match)
 
         for match in self.multiline_matches:
             squashed.append(match.join())
