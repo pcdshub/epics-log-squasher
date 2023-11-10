@@ -1,9 +1,9 @@
+See discussion for path forward `here <https://github.com/pcdshub/epics-log-squasher/discussions/8>`_.
+------------------------------------------------------------------------------------------------------
+
 ===============================
 epics-log-squasher
 ===============================
-
-.. image:: https://img.shields.io/travis/pcdshub/epics-log-squasher.svg
-        :target: https://travis-ci.org/pcdshub/epics-log-squasher
 
 .. image:: https://img.shields.io/pypi/v/epics-log-squasher.svg
         :target: https://pypi.python.org/pypi/epics-log-squasher
