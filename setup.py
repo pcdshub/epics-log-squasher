@@ -1,8 +1,9 @@
 import sys
 from os import path
 
-import versioneer
 from setuptools import find_packages, setup
+
+import versioneer
 
 min_version = (3, 7)
 
